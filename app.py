@@ -32,6 +32,22 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def extract_text(file_path, filename):
+    ext = filename.rsplit('.', 1)[1].lower()
+    if ext == 'pdf':
+        loader = PyPDFLoader(file_path)
+    elif ext == 'docx':
+        loader = Docx2txtLoader(file_path)
+    elif ext == 'txt':
+        loader = TextLoader(file_path)
+    else:
+        raise ValueError("Unsupported file type")
+    
+    documents = loader.load()
+    text_splitter = CharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
+    texts = text_splitter.split_documents(documents)
+    return texts
+
 @app.route('/')
 def index():
     return render_template('upload.html')
