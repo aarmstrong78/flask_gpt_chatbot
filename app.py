@@ -66,6 +66,19 @@ def initialize_vector_store():
     return vector_store
 
 
+def get_gpt_response(user_input, conversation, vector_store):
+    # Retrieve relevant context from vector store
+    relevant_docs = vector_store.similarity_search(user_input, k=3)
+    context = "\n".join([doc.page_content for doc in relevant_docs])
+    
+    # Combine user input with context
+    prompt = f"Context:\n{context}\n\nUser: {user_input}\nAI:"
+    
+    # Get response from LangChain's conversation
+    response = conversation.predict(input=user_input)
+    return response
+
+
 @app.route('/')
 def index():
     return render_template('upload.html')
