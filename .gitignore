@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.env
+
+# Virtual environment
+venv/
+ENV/
+env/
+
+# Uploaded files
+uploads/
+
+# IDEs and editors
+.vscode/
+.idea/
+*.swp
