@@ -96,8 +96,27 @@ def upload_file():
         return redirect(request.url)
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file.save(os.path.join(app.config['UPLOAD_FOLDER'], filename))
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        file.save(file_path)
         flash('File successfully uploaded')
+        
+        # Extract text from the uploaded file
+        try:
+            texts = extract_text(file_path, filename)
+        except ValueError as ve:
+            flash(str(ve))
+            return redirect(request.url)
+        
+        # Initialize or load vector store
+        vector_store = initialize_vector_store()
+        
+        # Add new documents to the vector store
+        vector_store.add_documents(texts)
+        
+        # Save the updated vector store
+        vector_store.save_local('vector_store.faiss')
+        
+        flash('File content integrated into context')
         return redirect(url_for('index'))
     else:
         flash('Allowed file types are pdf, docx, txt')
