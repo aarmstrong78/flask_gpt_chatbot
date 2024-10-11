@@ -1,7 +1,16 @@
+# app.py
+
 import os
-from flask import Flask, render_template, request, redirect, url_for, flash
+import openai
+from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+from langchain import OpenAI, ConversationChain, VectorStore
+from langchain.memory import ConversationBufferMemory
+from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain.text_splitter import CharacterTextSplitter
+from langchain.embeddings import OpenAIEmbeddings
+from langchain.vectorstores import FAISS
 
 # Load environment variables from .env file
 load_dotenv()
@@ -14,6 +23,10 @@ UPLOAD_FOLDER = 'uploads/'
 ALLOWED_EXTENSIONS = {'pdf', 'docx', 'txt'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
+
+# Initialize OpenAI API key
+openai.api_key = os.getenv('OPENAI_API_KEY')
+
 
 def allowed_file(filename):
     return '.' in filename and \
