@@ -48,6 +48,24 @@ def extract_text(file_path, filename):
     texts = text_splitter.split_documents(documents)
     return texts
 
+# Initialize LangChain components
+def initialize_conversation():
+    memory = ConversationBufferMemory()
+    llm = OpenAI(temperature=0.7)
+    conversation = ConversationChain(llm=llm, memory=memory)
+    return conversation
+
+# Initialize vector store for context from uploaded files
+def initialize_vector_store():
+    embeddings = OpenAIEmbeddings()
+    # Check if vector store already exists
+    if os.path.exists('vector_store.faiss'):
+        vector_store = FAISS.load_local('vector_store.faiss', embeddings)
+    else:
+        vector_store = FAISS.from_documents([], embeddings)
+    return vector_store
+
+
 @app.route('/')
 def index():
     return render_template('upload.html')
