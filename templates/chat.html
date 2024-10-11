@@ -1,16 +1,89 @@
+<!-- templates/chat.html -->
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
     <title>GPT Chat Interface</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.0.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        #chat-box {
+            height: 500px;
+            overflow-y: scroll;
+            border: 1px solid #ced4da;
+            padding: 15px;
+            border-radius: 5px;
+            background-color: #f8f9fa;
+        }
+        .user-msg {
+            text-align: right;
+            margin-bottom: 10px;
+        }
+        .ai-msg {
+            text-align: left;
+            margin-bottom: 10px;
+        }
+    </style>
 </head>
 <body>
     <div class="container mt-5">
         <h1>GPT Chat Interface</h1>
-        <!-- Chat interface will be implemented here -->
-        <p>Chat interface coming soon!</p>
+        <div id="chat-box" class="mb-3">
+            <!-- Chat messages will appear here -->
+        </div>
+        <form id="chat-form">
+            <div class="input-group">
+                <input type="text" id="message" class="form-control" placeholder="Type your message here..." required>
+                <button type="submit" class="btn btn-primary">Send</button>
+            </div>
+        </form>
+        <hr>
         <a href="{{ url_for('index') }}" class="btn btn-secondary">Back to Upload</a>
     </div>
+
+    <!-- JavaScript for handling chat -->
+    <script>
+        document.getElementById('chat-form').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const messageInput = document.getElementById('message');
+            const message = messageInput.value.trim();
+            if (!message) return;
+
+            // Display user message
+            const chatBox = document.getElementById('chat-box');
+            const userMsgDiv = document.createElement('div');
+            userMsgDiv.className = 'user-msg';
+            userMsgDiv.innerHTML = `<strong>You:</strong> ${message}`;
+            chatBox.appendChild(userMsgDiv);
+            chatBox.scrollTop = chatBox.scrollHeight;
+
+            // Clear input
+            messageInput.value = '';
+
+            // Send message to the server
+            const response = await fetch('{{ url_for("get_response") }}', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ message: message }),
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                const aiMsg = data.response;
+
+                // Display AI response
+                const aiMsgDiv = document.createElement('div');
+                aiMsgDiv.className = 'ai-msg';
+                aiMsgDiv.innerHTML = `<strong>AI:</strong> ${aiMsg}`;
+                chatBox.appendChild(aiMsgDiv);
+                chatBox.scrollTop = chatBox.scrollHeight;
+            } else {
+                const error = await response.json();
+                alert('Error: ' + error.error);
+            }
+        });
+    </script>
 </body>
 </html>
