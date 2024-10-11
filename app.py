@@ -103,9 +103,34 @@ def upload_file():
         flash('Allowed file types are pdf, docx, txt')
         return redirect(request.url)
 
-@app.route('/chat')
+@app.route('/chat', methods=['GET'])
 def chat():
+    if 'conversation' not in session:
+        session['conversation'] = initialize_conversation()
+    if 'vector_store' not in session:
+        session['vector_store'] = initialize_vector_store()
     return render_template('chat.html')
+
+@app.route('/get_response', methods=['POST'])
+def get_response():
+    user_input = request.json.get('message')
+    if not user_input:
+        return jsonify({'error': 'No input provided'}), 400
+    
+    # Initialize conversation and vector store from session
+    conversation = session.get('conversation')
+    vector_store = session.get('vector_store')
+    
+    if not conversation or not vector_store:
+        conversation = initialize_conversation()
+        vector_store = initialize_vector_store()
+        session['conversation'] = conversation
+        session['vector_store'] = vector_store
+    
+    # Get GPT response
+    response = get_gpt_response(user_input, conversation, vector_store)
+    
+    return jsonify({'response': response})
 
 if __name__ == '__main__':
     app.run(debug=True)
