@@ -131,10 +131,6 @@ def upload_file():
 
 @app.route('/chat', methods=['GET'])
 def chat():
-    if 'conversation' not in session:
-        session['conversation'] = initialize_conversation()
-    if 'vector_store' not in session:
-        session['vector_store'] = initialize_vector_store()
     return render_template('chat.html')
 
 @app.route('/get_response', methods=['POST'])
