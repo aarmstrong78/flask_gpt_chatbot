@@ -48,25 +48,21 @@ def extract_text(file_path, filename):
     texts = text_splitter.split_documents(documents)
     return texts
 
-# Initialize LangChain components
-def initialize_conversation():
-    memory = ConversationBufferMemory()
-    llm = OpenAI(temperature=0.7)
-    conversation = ConversationChain(llm=llm, memory=memory)
-    return conversation
+# Initialize LangChain components globally
+memory = ConversationBufferMemory()
+llm = OpenAI(temperature=0.7)
+conversation = ConversationChain(llm=llm, memory=memory)
 
 # Initialize vector store for context from uploaded files
-def initialize_vector_store():
-    embeddings = OpenAIEmbeddings()
-    # Check if vector store already exists
-    if os.path.exists('vector_store.faiss'):
-        vector_store = FAISS.load_local('vector_store.faiss', embeddings)
-    else:
-        vector_store = FAISS.from_documents([], embeddings)
-    return vector_store
+embeddings = OpenAIEmbeddings()
+vector_store_path = 'vector_store.faiss'
 
+if os.path.exists(vector_store_path):
+    vector_store = FAISS.load_local(vector_store_path, embeddings)
+else:
+    vector_store = FAISS.from_documents([], embeddings)
 
-def get_gpt_response(user_input, conversation, vector_store):
+def get_gpt_response(user_input):
     # Retrieve relevant context from vector store
     relevant_docs = vector_store.similarity_search(user_input, k=3)
     context = "\n".join([doc.page_content for doc in relevant_docs])
@@ -77,6 +73,7 @@ def get_gpt_response(user_input, conversation, vector_store):
     # Get response from LangChain's conversation
     response = conversation.predict(input=user_input)
     return response
+
 
 
 @app.route('/')
@@ -107,14 +104,11 @@ def upload_file():
             flash(str(ve))
             return redirect(request.url)
         
-        # Initialize or load vector store
-        vector_store = initialize_vector_store()
-        
         # Add new documents to the vector store
         vector_store.add_documents(texts)
         
         # Save the updated vector store
-        vector_store.save_local('vector_store.faiss')
+        vector_store.save_local(vector_store_path)
         
         flash('File content integrated into context')
         return redirect(url_for('index'))
