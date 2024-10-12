@@ -1,0 +1,65 @@
+<!-- templates/base.html -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>DocuChat</title>
+    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+    
+    <!-- Highlight.js CSS (Choose a Theme) -->
+    <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/default.min.css">
+    
+    <!-- Custom CSS for Header -->
+    <style>
+        /* Header Styling */
+        .header {
+            background-color: #4CAF50;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        
+        .header h1 {
+            margin: 0;
+            font-size: 24px;
+        }
+        
+        .header a {
+            background-color: #ffffff;
+            color: #4CAF50;
+            padding: 8px 16px;
+            text-decoration: none;
+            border-radius: 5px;
+            font-weight: bold;
+        }
+        
+        .header a:hover {
+            background-color: #dddddd;
+        }
+    </style>
+    
+    {% block head %}{% endblock %}
+</head>
+<body>
+    <!-- Header Section -->
+    <div class="header">
+        <h1>DocuChat</h1>
+        <a href="{{ url_for('upload_file') }}">Upload Documents</a>
+    </div>
+    
+    <!-- Main Content -->
+    {% block content %}{% endblock %}
+    
+    <!-- Highlight.js and Custom Scripts -->
+    {% block scripts %}
+        <!-- Marked.js for Markdown parsing -->
+        <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+        
+        <!-- Highlight.js for syntax highlighting -->
+        <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+        <script>hljs.highlightAll();</script>
+    {% endblock %}
+</body>
+</html>
