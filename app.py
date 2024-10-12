@@ -5,7 +5,8 @@ import openai
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
-from langchain import OpenAI, ConversationChain
+from langchain import ConversationChain
+from langchain.chat_models import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
 from langchain.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
@@ -50,7 +51,10 @@ def extract_text(file_path, filename):
 
 # Initialize LangChain components globally
 memory = ConversationBufferMemory()
-llm = OpenAI(temperature=0.7)
+llm = ChatOpenAI(
+    temperature=0.7,
+    model_name="gpt-4o"
+)
 conversation = ConversationChain(llm=llm, memory=memory)
 
 # Initialize vector store for context from uploaded files
