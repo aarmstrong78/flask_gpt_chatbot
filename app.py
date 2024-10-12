@@ -141,7 +141,7 @@ def get_gpt_response(user_input):
     try:
         if vector_store is not None:
             # Retrieve relevant context from vector store
-            relevant_docs = vector_store.similarity_search(user_input, k=3)
+            relevant_docs = vector_store.similarity_search(user_input, k=10)
             context = "\n".join([doc.page_content for doc in relevant_docs])
             
             # Log the retrieved context
