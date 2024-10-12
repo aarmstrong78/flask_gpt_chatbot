@@ -17,3 +17,7 @@ uploads/
 .vscode/
 .idea/
 *.swp
+
+# Vector Store
+vector_store.faiss/
+
