@@ -18,6 +18,6 @@ uploads/
 .idea/
 *.swp
 
-# Vector Store
-vector_store.faiss/
+# Data folder for Vector Store
+data/
 
