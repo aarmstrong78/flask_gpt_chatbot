@@ -63,9 +63,12 @@ else:
     vector_store = None  # Initialize as None when no documents are present
 
 def get_gpt_response(user_input):
-    # Retrieve relevant context from vector store
-    relevant_docs = vector_store.similarity_search(user_input, k=3)
-    context = "\n".join([doc.page_content for doc in relevant_docs])
+    if vector_store is not None:
+        # Retrieve relevant context from vector store
+        relevant_docs = vector_store.similarity_search(user_input, k=3)
+        context = "\n".join([doc.page_content for doc in relevant_docs])
+    else:
+        context = ""
     
     # Combine user input with context
     prompt = f"Context:\n{context}\n\nUser: {user_input}\nAI:"
