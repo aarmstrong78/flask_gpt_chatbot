@@ -60,7 +60,7 @@ vector_store_path = 'vector_store.faiss'
 if os.path.exists(vector_store_path):
     vector_store = FAISS.load_local(vector_store_path, embeddings)
 else:
-    vector_store = FAISS.from_documents([], embeddings)
+    vector_store = None  # Initialize as None when no documents are present
 
 def get_gpt_response(user_input):
     # Retrieve relevant context from vector store
@@ -82,6 +82,7 @@ def index():
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
+    global vector_store  # Declare as global to modify the global variable
     # Check if the post request has the file part
     if 'file' not in request.files:
         flash('No file part')
@@ -104,17 +105,26 @@ def upload_file():
             flash(str(ve))
             return redirect(request.url)
         
-        # Add new documents to the vector store
-        vector_store.add_documents(texts)
+        if texts:
+            if vector_store is None:
+                # Initialize FAISS with the first set of documents
+                vector_store = FAISS.from_documents(texts, embeddings)
+                flash('Vector store created and file content integrated into context')
+            else:
+                # Add new documents to the existing vector store
+                vector_store.add_documents(texts)
+                flash('File content integrated into context')
+            
+            # Save the updated vector store
+            vector_store.save_local(vector_store_path)
+        else:
+            flash('No text extracted from the uploaded file')
         
-        # Save the updated vector store
-        vector_store.save_local(vector_store_path)
-        
-        flash('File content integrated into context')
         return redirect(url_for('index'))
     else:
         flash('Allowed file types are pdf, docx, txt')
         return redirect(request.url)
+
 
 @app.route('/chat', methods=['GET'])
 def chat():
