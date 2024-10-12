@@ -7,7 +7,7 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 from langchain import OpenAI, ConversationChain
 from langchain.memory import ConversationBufferMemory
-from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
+from langchain.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
 from langchain.embeddings import OpenAIEmbeddings
 from langchain.vectorstores import FAISS
@@ -37,7 +37,7 @@ def extract_text(file_path, filename):
     if ext == 'pdf':
         loader = PyPDFLoader(file_path)
     elif ext == 'docx':
-        loader = Docx2txtLoader(file_path)
+        loader = UnstructuredWordDocumentLoader(file_path)
     elif ext == 'txt':
         loader = TextLoader(file_path)
     else:
