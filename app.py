@@ -139,18 +139,8 @@ def get_response():
     if not user_input:
         return jsonify({'error': 'No input provided'}), 400
     
-    # Initialize conversation and vector store from session
-    conversation = session.get('conversation')
-    vector_store = session.get('vector_store')
-    
-    if not conversation or not vector_store:
-        conversation = initialize_conversation()
-        vector_store = initialize_vector_store()
-        session['conversation'] = conversation
-        session['vector_store'] = vector_store
-    
     # Get GPT response
-    response = get_gpt_response(user_input, conversation, vector_store)
+    response = get_gpt_response(user_input)
     
     return jsonify({'response': response})
 
