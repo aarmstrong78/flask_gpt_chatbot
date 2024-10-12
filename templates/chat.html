@@ -1,30 +1,26 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <title>GPT Chat Interface</title>
-    <link rel="icon" href="{{ url_for('static', filename='favicon.ico') }}" type="image/x-icon">
+<!-- templates/chat.html -->
+{% extends "base.html" %}
+
+{% block content %}
+    <div class="chat-container" id="chat-container">
+        <!-- Chat messages will be appended here -->
+    </div>
     
-    <!-- Highlight.js CSS (Choose a Theme) -->
-    <link rel="stylesheet" href="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/default.min.css">
+    <div class="input-container">
+        <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+        <button id="send-button">Send</button>
+    </div>
     
-    <!-- Custom CSS for Chat Interface -->
+    <!-- Custom Styles for Chat Interface -->
     <style>
-        body {
-            font-family: Arial, sans-serif;
-            background-color: #f5f5f5;
-            margin: 0;
-            padding: 0;
-            display: flex;
-            flex-direction: column;
-            height: 100vh;
-        }
-        
         .chat-container {
             flex: 1;
             padding: 20px;
             overflow-y: auto;
             background-color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 80px); /* Adjust based on header and input height */
         }
         
         .message {
@@ -34,23 +30,35 @@
             border-radius: 10px;
             position: relative;
             word-wrap: break-word;
+            display: flex;
+            align-items: flex-start;
         }
         
         .message.user {
             background-color: #dcf8c6;
             align-self: flex-end;
             margin-left: auto;
+            flex-direction: row-reverse;
         }
         
         .message.bot {
             background-color: #f1f0f0;
             align-self: flex-start;
-            margin-right: auto;
+            flex-direction: row;
+        }
+        
+        .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            margin: 0 10px;
+            object-fit: cover;
+            vertical-align: middle;
         }
         
         .input-container {
             display: flex;
-            padding: 10px;
+            padding: 10px 20px;
             background-color: #eeeeee;
         }
         
@@ -89,24 +97,36 @@
         code {
             font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
         }
+        
+        /* Timestamp styling */
+        .timestamp {
+            display: block;
+            font-size: 0.8em;
+            color: #888888;
+            margin-top: 5px;
+            text-align: right;
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 600px) {
+            .message {
+                max-width: 100%;
+            }
+            
+            .input-container input {
+                font-size: 14px;
+            }
+            
+            .input-container button {
+                font-size: 14px;
+                padding: 8px 16px;
+            }
+        }
     </style>
-</head>
-<body>
-    <div class="chat-container" id="chat-container">
-        <!-- Chat messages will be appended here -->
-    </div>
-    
-    <div class="input-container">
-        <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
-        <button id="send-button">Send</button>
-    </div>
-    
-    <!-- Marked.js for Markdown parsing -->
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    
-    <!-- Highlight.js for syntax highlighting -->
-    <script src="//cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
-    <script>hljs.highlightAll();</script>
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }} <!-- Include scripts from base.html -->
     
     <!-- Custom JavaScript for handling chat -->
     <script>
@@ -152,26 +172,54 @@
             const messageDiv = document.createElement('div');
             messageDiv.classList.add('message', sender);
             
+            // Create avatar
+            const avatar = document.createElement('img');
+            avatar.classList.add('avatar');
+            if (sender === 'bot') {
+                avatar.src = "{{ url_for('static', filename='bot_avatar.png') }}"; // Add your bot avatar
+            } else {
+                avatar.src = "{{ url_for('static', filename='user_avatar.png') }}"; // Add your user avatar
+            }
+            
+            // Create message content
+            const contentDiv = document.createElement('div');
             if (sender === 'bot') {
                 // Parse Markdown to HTML
                 const htmlContent = marked.parse(message, { 
                     breaks: true,
                     gfm: true
                 });
-                messageDiv.innerHTML = htmlContent;
+                contentDiv.innerHTML = htmlContent;
                 
                 // After setting innerHTML, highlight any code blocks
-                messageDiv.querySelectorAll('pre code').forEach((block) => {
+                contentDiv.querySelectorAll('pre code').forEach((block) => {
                     hljs.highlightElement(block);
                 });
             } else {
                 // For user messages, display as plain text
-                messageDiv.textContent = message;
+                contentDiv.textContent = message;
             }
+            
+            // Create timestamp
+            const timestamp = document.createElement('span');
+            timestamp.classList.add('timestamp');
+            const now = new Date();
+            const hours = now.getHours().toString().padStart(2, '0');
+            const minutes = now.getMinutes().toString().padStart(2, '0');
+            timestamp.textContent = `${hours}:${minutes}`;
+            
+            // Assemble message
+            if (sender === 'bot') {
+                messageDiv.appendChild(avatar);
+                messageDiv.appendChild(contentDiv);
+            } else {
+                messageDiv.appendChild(contentDiv);
+                messageDiv.appendChild(avatar);
+            }
+            messageDiv.appendChild(timestamp);
             
             chatContainer.appendChild(messageDiv);
             chatContainer.scrollTop = chatContainer.scrollHeight;
         }
     </script>
-</body>
-</html>
+{% endblock %}
