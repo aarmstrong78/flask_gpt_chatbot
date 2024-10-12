@@ -5,7 +5,7 @@ import openai
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
-from langchain import OpenAI, ConversationChain, VectorStore
+from langchain import OpenAI, ConversationChain
 from langchain.memory import ConversationBufferMemory
 from langchain.document_loaders import PyPDFLoader, Docx2txtLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
