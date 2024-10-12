@@ -11,3 +11,5 @@ unstructured==0.6.7
 tiktoken
 sentence-transformers==2.2.2
 faiss-cpu==1.7.3
+
+cachetools
