@@ -2,18 +2,31 @@
 
 import os
 import openai
-from openai.error import RateLimitError
+from openai import RateLimitError
+
 from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
-from langchain import ConversationChain
-from langchain.chat_models import ChatOpenAI
+
+from langchain.chains import ConversationChain
+from langchain_core.documents import Document
+
+from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
-from langchain.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader
+from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader
 from langchain.text_splitter import CharacterTextSplitter
-from langchain.embeddings import OpenAIEmbeddings
-from langchain.vectorstores import FAISS
+from langchain_openai import OpenAIEmbeddings
+from langchain_community.vectorstores import FAISS
+from langchain_community.docstore.in_memory import InMemoryDocstore
+
+from langchain.indexes import SQLRecordManager, index
+import faiss
+
 from cachetools import TTLCache, cached
+
+import json
+import numpy as np
+import uuid  # Ensure uuid is imported
 
 
 # =====================
@@ -63,10 +76,6 @@ app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
 # Initialize embedding cache with TTL of 1 hour and max size of 1000
 cache = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
 
-@cached(cache)
-def get_cached_embedding(text):
-    return embeddings.embed_query(text)
-
 # =====================
 # Helper Functions
 # =====================
@@ -108,26 +117,118 @@ llm = ChatOpenAI(
     model_name="gpt-4o"
 )
 conversation = ConversationChain(llm=llm, memory=memory)
+logger.info(f"Using OpenAI model: {llm.model_name}")
 
-# Initialize vector store for context from uploaded files
+
+# Define paths for vector store and document mapping
+vector_store_path = 'data/vector_store.faiss'
+mapping_path = 'data/document_mapping.json'
+record_manager_path = 'data/record_manager_cache.sql'
+
+# Initialize RecordManager
+namespace = "faiss/convodocs"  # Define a namespace for your application
+
+
+if os.path.exists(record_manager_path):
+    try:
+        record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+        logger.info("Loaded existing SQLRecordManager.")
+    except Exception as e:
+        logger.error(f"Failed to load SQLRecordManager: {e}")
+        record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+        record_manager.create_schema()
+        logger.info("Initialized new SQLRecordManager with schema.")
+else:
+    record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+    record_manager.create_schema()
+    logger.info("Initialized new SQLRecordManager with schema.")
+
+
+# Initialize embeddings globally
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-large",  # Specify the embedding model
     openai_api_key=os.getenv('OPENAI_API_KEY'),
     max_retries=6  # Increase the number of retries
-#    retry_delay=4  # Adjust the initial delay
 )
-vector_store_path = 'vector_store.faiss'
 
+@cached(cache)
+def get_cached_embedding(text):
+    return embeddings.embed_query(text)
+
+
+
+# Create or load the FAISS vector store
+vector_store = None
+all_documents = []
 if os.path.exists(vector_store_path):
     try:
         vector_store = FAISS.load_local(vector_store_path, embeddings)
+        all_documents = vector_store.vectorstore.get_all_documents()
         logger.info("Loaded existing FAISS vector store.")
     except Exception as e:
         logger.error(f"Failed to load FAISS vector store: {e}")
-        vector_store = None
+        logger.info("FAISS vector store will be initialized upon first document upload.")
 else:
-    vector_store = None  # Initialize as None when no documents are present
     logger.info("No existing FAISS vector store found. It will be created upon first upload.")
+
+
+# Build a list of all current documents from the vector store
+if vector_store is not None:
+    all_documents = vector_store.vectorstore.get_all_documents()
+else:
+    all_documents = []
+
+# Load or initialize the document mapping
+if os.path.exists(mapping_path):
+    try:
+        with open(mapping_path, 'r') as f:
+            # Check if the file is empty
+            if os.path.getsize(mapping_path) > 0:
+                document_mapping = json.load(f)
+                logger.info("Loaded existing document mapping.")
+            else:
+                # File is empty, initialize empty dict
+                document_mapping = {}
+                with open(mapping_path, 'w') as fw:
+                    json.dump(document_mapping, fw)
+                logger.warning("document_mapping.json was empty. Initialized as empty dictionary.")
+    except json.JSONDecodeError:
+        # JSON is malformed, initialize empty dict
+        document_mapping = {}
+        with open(mapping_path, 'w') as fw:
+            json.dump(document_mapping, fw)
+        logger.error("document_mapping.json was malformed. Reinitialized as empty dictionary.")
+else:
+    document_mapping = {}
+    with open(mapping_path, 'w') as f:
+        json.dump(document_mapping, f)
+    logger.info("Initialized new document mapping.")
+
+
+def initialize_faiss():
+    """
+    Initialize the FAISS vector store upon the first document upload.
+    """
+    global vector_store
+    try:
+        # Determine the embedding dimension from a sample embedding
+        sample_embedding = embeddings.embed_query("test")
+        embedding_dim = len(sample_embedding)
+        logger.info(f"Embedding dimension determined: {embedding_dim}")
+        
+        # Create a FAISS index
+        faiss_index = faiss.IndexFlatL2(embedding_dim)
+        vector_store = FAISS(
+            embedding_function=embeddings,
+            index=faiss_index,
+            docstore= InMemoryDocstore(),
+            index_to_docstore_id={}
+            )
+        logger.info("FAISS vector store initialized with IndexFlatL2.")
+    except Exception as e:
+        logger.error(f"Failed to initialize FAISS vector store: {e}")
+        vector_store = None
+
 
 # =====================
 # Core Functions
@@ -171,11 +272,58 @@ def get_gpt_response(user_input):
         logger.error(f"An error occurred: {e}")
         return "An unexpected error occurred. Please try again later."
 
+def remove_document(document_id):
+    """
+    Remove a document and its embedding from the FAISS vector store and document mapping.
+    """
+    if document_id not in document_mapping:
+        logger.warning(f"Document ID {document_id} not found in mapping.")
+        raise ValueError("Document ID not found.")
+    
+    # Retrieve the source from the document metadata
+    source = document_mapping[document_id]['metadata']['source']
+    
+    # Fetch all documents associated with this source
+    #source_docs = [doc for doc in all_documents if doc.metadata['source'] == source]
+    
+    # Perform full cleanup for this source
+    index(
+        [], #source_docs,  # Provide updated list of documents for this source (empty to delete)
+        record_manager,
+        vector_store,
+        cleanup="full",
+        source_id_key=source
+    )
+    
+    # Remove the document from the local mapping
+    del document_mapping[document_id]
+    
+    # Save the updated document mapping
+    with open(mapping_path, 'w') as f:
+        json.dump(document_mapping, f)
+    
+    # Optionally, remove the file from the server if needed
+    # file_path = document_mapping[document_id]['file_path']
+    # if os.path.exists(file_path):
+    #     os.remove(file_path)
+    #     logger.info(f"Removed file: {file_path}")
 
 
 @app.route('/')
-def index():
+def home():
+    """
+    Redirect the root URL to the chat page.
+    """
+    return redirect(url_for('chat'))
+
+@app.route('/upload_page', methods=['GET'])
+def upload_page():
+    """
+    Render the upload page via a GET request.
+    """
     return render_template('upload.html')
+
+
 
 @app.route('/upload', methods=['POST'])
 def upload_file():
@@ -188,7 +336,7 @@ def upload_file():
     if 'file' not in request.files:
         flash('No file part')
         logger.warning("No file part in the request.")
-        return redirect(request.url)
+        redirect(url_for('upload_page'))
     
     file = request.files['file']
     
@@ -196,7 +344,7 @@ def upload_file():
     if file.filename == '':
         flash('No selected file')
         logger.warning("No file selected for upload.")
-        return redirect(request.url)
+        redirect(url_for('upload_page'))
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
@@ -212,29 +360,49 @@ def upload_file():
         except ValueError as ve:
             flash(str(ve))
             logger.error(f"Error extracting text: {ve}")
-            return redirect(request.url)
+            redirect(url_for('upload_page'))
         
         if texts:
             try:
-                # Generate embeddings using cached function
-                for text in texts:
-                    get_cached_embedding(text.page_content)
-                logger.info("Embeddings generated and cached.")
-                
+                # Initialize FAISS vector store if it's None
                 if vector_store is None:
-                    # Initialize FAISS with the first set of documents
-                    vector_store = FAISS.from_documents(texts, embeddings)
-                    logger.info("Initialized FAISS vector store with uploaded documents.")
-                    flash('Vector store created and file content integrated into context')
-                else:
-                    # Add new documents to the existing vector store
-                    vector_store.add_documents(texts)
-                    logger.info(f"Added {len(texts)} new documents to FAISS vector store.")
-                    flash('File content integrated into context')
+                    initialize_faiss()
+                    if vector_store is None:
+                        flash("Failed to initialize the vector store. Please check the logs.")
+                        redirect(url_for('upload_page'))
                 
-                # Save the updated vector store
-                vector_store.save_local(vector_store_path)
-                logger.info("FAISS vector store saved successfully.")
+                # Create Document objects with 'source' metadata
+                source_id = filename  # Using filename as the source identifier
+                new_documents = [
+                    Document(page_content=text.page_content, metadata={"source": source_id})
+                    for text in texts
+                ]
+                
+                # Index the new documents with 'incremental' cleanup
+                indexing_result = index(
+                    new_documents,
+                    record_manager,
+                    vector_store,
+                    cleanup="incremental",
+                    source_id_key="source"
+                )
+                
+                logger.info(f"Indexing result: {indexing_result}")
+                
+                # Update the local document mapping
+                for doc in new_documents:
+                    document_id = str(uuid.uuid4())
+                    document_mapping[document_id] = {
+                        'page_content': doc.page_content,
+                        'metadata': doc.metadata,
+                        'file_path': file_path
+                    }
+                
+                # Save the updated document mapping
+                with open(mapping_path, 'w') as f:
+                    json.dump(document_mapping, f)
+                
+                flash('File content integrated into context')
             except RateLimitError as e:
                 flash("Rate limit exceeded while processing your file. Please try again later.")
                 logger.error(f"Rate limit exceeded during embedding: {e}")
@@ -244,17 +412,19 @@ def upload_file():
         else:
             flash('No text extracted from the uploaded file')
             logger.warning("No text extracted from the uploaded file.")
-        
-        return redirect(url_for('index'))
+       
+        return redirect(url_for('chat'))
     else:
         flash('Allowed file types are pdf, docx, txt')
         logger.warning(f"Attempted to upload unsupported file type: {file.filename}")
-        return redirect(request.url)
-
+        return redirect(url_for('upload_page'))
 
 @app.route('/chat', methods=['GET'])
 def chat():
-    return render_template('chat.html')
+    """
+    Render the chat interface.
+    """
+    return render_template('chat.html', document_mapping=document_mapping)
 
 @app.route('/get_response', methods=['POST'])
 def get_response():
@@ -266,6 +436,28 @@ def get_response():
     response = get_gpt_response(user_input)
     
     return jsonify({'response': response})
+
+@app.route('/remove_document', methods=['POST'])
+def remove_document_route():
+    """
+    Endpoint to remove a document and its embeddings from the context.
+    Expects JSON data with 'document_id'.
+    """
+    data = request.get_json()
+    document_id = data.get('document_id')
+    
+    if not document_id:
+        return jsonify({'error': 'No document_id provided'}), 400
+    
+    try:
+        remove_document(document_id)
+        flash(f'Document {document_id} removed successfully.')
+        return jsonify({'message': f'Document {document_id} removed successfully.'}), 200
+    except ValueError as ve:
+        return jsonify({'error': str(ve)}), 404
+    except Exception as e:
+        logger.error(f"Error removing document {document_id}: {e}")
+        return jsonify({'error': 'Failed to remove document.'}), 500
 
 
 # =====================

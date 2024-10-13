@@ -1,6 +1,8 @@
 Flask==2.3.2
-openai==0.27.0
-langchain==0.0.148
+openai<2.0.0
+langchain>0.0.148
+langchain_openai
+langchain_community
 Werkzeug==2.3.4
 python-dotenv==1.0.0
 PyPDF2==3.0.1
