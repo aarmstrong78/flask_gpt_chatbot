@@ -274,7 +274,7 @@ def get_gpt_response(user_input):
 
 def remove_document(document_id):
     """
-    Remove a document and its embedding from the FAISS vector store and document mapping.
+    Remove a document and its embeddings from the FAISS vector store and document mapping.
     """
     if document_id not in document_mapping:
         logger.warning(f"Document ID {document_id} not found in mapping.")
@@ -284,30 +284,77 @@ def remove_document(document_id):
     source = document_mapping[document_id]['metadata']['source']
     
     # Fetch all documents associated with this source
-    #source_docs = [doc for doc in all_documents if doc.metadata['source'] == source]
+    source_docs = [
+        Document(
+            page_content=doc['page_content'],
+            metadata=doc['metadata']
+        )
+        for doc in document_mapping.values()
+        if doc['metadata']['source'] == source
+    ]
     
     # Perform full cleanup for this source
-    index(
-        [], #source_docs,  # Provide updated list of documents for this source (empty to delete)
+    # To delete all documents from this source, pass an empty list for these documents
+    # However, the indexing API expects a full list of all documents to retain
+    # Therefore, retrieve all documents excluding those from the source to be deleted
+    all_current_docs = [
+        Document(
+            page_content=doc['page_content'],
+            metadata=doc['metadata']
+        )
+        for doc in document_mapping.values()
+    ]
+    
+    # Exclude documents from the source to be deleted
+    updated_docs = [
+        doc for doc in all_current_docs
+        if doc.metadata['source'] != source
+    ]
+    
+    # Perform full cleanup with the updated list
+    indexing_result = index(
+        updated_docs,
         record_manager,
         vector_store,
         cleanup="full",
-        source_id_key=source
+        source_id_key="source"
     )
     
-    # Remove the document from the local mapping
-    del document_mapping[document_id]
+    logger.info(f"Indexing result during deletion: {indexing_result}")
+    
+    # Remove all documents associated with this source from the local mapping
+    to_delete = [doc_id for doc_id, doc in document_mapping.items() if doc['metadata']['source'] == source]
+    for doc_id in to_delete:
+        del document_mapping[doc_id]
     
     # Save the updated document mapping
     with open(mapping_path, 'w') as f:
         json.dump(document_mapping, f)
     
-    # Optionally, remove the file from the server if needed
-    # file_path = document_mapping[document_id]['file_path']
-    # if os.path.exists(file_path):
-    #     os.remove(file_path)
-    #     logger.info(f"Removed file: {file_path}")
+    # Save the FAISS vector store to disk
+    if vector_store is not None:
+        vector_store.save_local(vector_store_path)
+        logger.info("FAISS vector store saved to disk after deletion.")
 
+# After indexing or deletion, update all_documents
+def update_all_documents():
+    """
+    Fetch all current documents from the record manager.
+    """
+    global all_documents
+    try:
+        records = record_manager.get_all_records()
+        all_documents = [
+            Document(
+                page_content=record.page_content,
+                metadata=record.metadata
+            )
+            for record in records
+        ]
+        logger.info(f"Updated all_documents list with {len(all_documents)} documents.")
+    except Exception as e:
+        logger.error(f"Failed to update all_documents: {e}")
+        all_documents = []
 
 @app.route('/')
 def home():
@@ -401,6 +448,12 @@ def upload_file():
                 # Save the updated document mapping
                 with open(mapping_path, 'w') as f:
                     json.dump(document_mapping, f)
+
+                # Save the FAISS vector store to disk
+                if vector_store is not None:
+                    vector_store.save_local(vector_store_path)
+                    logger.info("FAISS vector store saved to disk after upload.")
+                
                 
                 flash('File content integrated into context')
             except RateLimitError as e:
