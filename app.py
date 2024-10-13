@@ -4,7 +4,7 @@ import os
 import openai
 from openai import RateLimitError
 
-from flask import Flask, render_template, request, redirect, url_for, flash, session, jsonify
+from flask import Flask, Response, render_template, request, redirect, url_for, flash, session, jsonify
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
@@ -20,6 +20,7 @@ from langchain_community.vectorstores import FAISS
 from langchain_community.docstore.in_memory import InMemoryDocstore
 
 from langchain.indexes import SQLRecordManager, index
+from langchain.schema import HumanMessage, AIMessage, SystemMessage
 import faiss
 
 from cachetools import TTLCache, cached
@@ -114,8 +115,10 @@ def extract_text(file_path, filename):
 memory = ConversationBufferMemory()
 llm = ChatOpenAI(
     temperature=0.7,
-    model_name="gpt-4o"
+    model_name="gpt-4o",
+    streaming=True  # Enable streaming
 )
+
 conversation = ConversationChain(llm=llm, memory=memory)
 logger.info(f"Using OpenAI model: {llm.model_name}")
 
@@ -319,6 +322,65 @@ def get_gpt_response(user_input):
         return "An unexpected error occurred. Please try again later."
 
 
+def get_gpt_response_stream(user_input):
+    """
+    Generate a streaming response from GPT-4o based on user input and contextual embeddings.
+    Yields tokens as they are generated.
+    """
+    try:
+        if vector_store is not None:
+            # Retrieve relevant context from vector store
+            relevant_docs = vector_store.similarity_search(user_input, k=10)
+            context = "\n".join([doc.page_content for doc in relevant_docs])
+            
+            # Log the retrieved context
+            for idx, doc in enumerate(relevant_docs):
+                snippet = doc.page_content[:100].replace('\n', ' ') + '...' if len(doc.page_content) > 100 else doc.page_content
+                logger.info(f"Retrieved Doc {idx + 1}: {snippet}")
+            
+            # Update memory with the context
+            memory.chat_memory.add_user_message(f"Context:\n{context}")
+        else:
+            context = ""
+            logger.warning("Vector store is empty. No context available.")
+        
+        # Add user message to memory
+        memory.chat_memory.add_user_message(user_input)
+        
+        # Stream the response using ConversationChain's predict method
+        # Note: LangChain's ConversationChain does not natively support streaming.
+        # Therefore, we'll interact directly with ChatOpenAI for streaming.
+
+        # Initialize ChatOpenAI with streaming
+        #stream_llm = ChatOpenAI(
+        #    temperature=0.7,
+        #    model_name="gpt-4o",
+        #    streaming=True  # Enable streaming
+        #)
+
+        # Prepare the conversation messages
+        messages = memory.chat_memory.messages
+        ai_response = ""
+        # Start streaming the response
+        for chunk in llm.stream(messages):
+            # Each chunk is an AIMessageChunk object
+            content = chunk.content
+            if content:
+                ai_response += content
+                yield content
+        
+        # After streaming, add AI's response to memory
+        memory.chat_memory.add_ai_message(ai_response)
+
+
+    except RateLimitError as e:
+        logger.error(f"Rate limit exceeded: {e}")
+        yield "I'm currently experiencing high demand. Please try again later."
+    except Exception as e:
+        logger.error(f"An error occurred: {e}")
+        yield "An unexpected error occurred. Please try again later."
+
+
 def remove_document(document_id):
     """
     Remove a document and its embeddings from the FAISS vector store and document mapping.
@@ -508,6 +570,23 @@ def get_response():
     response = get_gpt_response(user_input)
     
     return jsonify({'response': response})
+
+@app.route('/stream_response', methods=['POST'])
+def stream_response():
+    """
+    Handle chat messages and stream responses from GPT-4o.
+    Expects JSON data with 'message'.
+    """
+    user_input = request.json.get('message')
+    if not user_input:
+        return jsonify({'error': 'No input provided'}), 400
+
+    # Create a generator for the streaming response
+    response_generator = get_gpt_response_stream(user_input)
+
+    # Return a streaming response using Flask's Response
+    return Response(response_generator, mimetype='text/plain')
+
 
 @app.route('/remove_document', methods=['POST'])
 def remove_document_route():

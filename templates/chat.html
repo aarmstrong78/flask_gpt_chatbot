@@ -1,226 +1,233 @@
 <!-- templates/chat.html -->
 {% extends "base.html" %}
 
-{% block content %}
-    <div class="chat-container" id="chat-container">
-        <!-- Chat messages will be appended here -->
-    </div>
-    
-    <div class="input-container">
-        <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
-        <button id="send-button">Send</button>
-    </div>
-    
-    <!-- Custom Styles for Chat Interface -->
+{% block head %}
+    {{ super() }} <!-- Include any additional head elements from base.html -->
     <style>
+        /* Styles specific to the chat page */
         .chat-container {
-            flex: 1;
-            padding: 20px;
-            overflow-y: auto;
-            background-color: #ffffff;
             display: flex;
             flex-direction: column;
-            /*height: calc(100vh - 80px); /* Adjust based on header and input height */
-            height: calc(100vh - 200px); /* Adjust based on header and input height */
+            height: 80vh;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+        
+        .messages {
+            flex: 1;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            padding-right: 10px;
         }
         
         .message {
             margin-bottom: 15px;
-            max-width: 80%;
-            padding: 10px 15px;
-            border-radius: 10px;
-            position: relative;
-            word-wrap: break-word;
             display: flex;
-            align-items: flex-start;
+            flex-direction: column;
         }
         
-        .message.user {
-            background-color: #dcf8c6;
+        .message.user .content {
             align-self: flex-end;
-            margin-left: auto;
-            flex-direction: row-reverse;
+            background-color: #dcf8c6;
+            color: #000;
         }
         
-        .message.bot {
-            background-color: #f1f0f0;
+        .message.ai .content {
             align-self: flex-start;
-            flex-direction: row;
+            background-color: #f1f0f0;
+            color: #000;
         }
         
-        .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            margin: 0 10px;
-            object-fit: cover;
-            vertical-align: middle;
+        .content {
+            padding: 10px 15px;
+            border-radius: 20px;
+            max-width: 70%;
+            word-wrap: break-word;
+            font-size: 16px;
+            line-height: 1.4;
         }
         
         .input-container {
             display: flex;
-            padding: 10px 20px;
-            background-color: #eeeeee;
+            gap: 10px;
         }
         
-        .input-container input {
+        .input-container input[type="text"] {
             flex: 1;
-            padding: 10px;
+            padding: 10px 15px;
+            border: 1px solid #ccc;
+            border-radius: 20px;
+            outline: none;
             font-size: 16px;
-            border: none;
-            border-radius: 5px;
-            margin-right: 10px;
         }
         
         .input-container button {
             padding: 10px 20px;
-            font-size: 16px;
             border: none;
-            border-radius: 5px;
+            border-radius: 20px;
             background-color: #4CAF50;
             color: white;
+            font-size: 16px;
             cursor: pointer;
+            transition: background-color 0.3s ease;
         }
         
-        .input-container button:hover {
+        .input-container button:disabled {
+            background-color: #9E9E9E;
+            cursor: not-allowed;
+        }
+        
+        .input-container button:hover:not(:disabled) {
             background-color: #45a049;
         }
         
-        /* Ensure code blocks are styled properly */
-        pre {
-            background-color: #2d2d2d;
-            color: #ccc;
-            padding: 10px;
-            border-radius: 5px;
-            overflow-x: auto;
+        /* Scrollbar styling for messages */
+        .messages::-webkit-scrollbar {
+            width: 8px;
         }
         
-        code {
-            font-family: Consolas, Monaco, 'Andale Mono', 'Ubuntu Mono', monospace;
-        }
-        
-        /* Timestamp styling */
-        .timestamp {
-            display: block;
-            font-size: 0.8em;
-            color: #888888;
-            margin-top: 5px;
-            text-align: right;
+        .messages::-webkit-scrollbar-thumb {
+            background-color: rgba(0,0,0,0.2);
+            border-radius: 4px;
         }
         
         /* Responsive Design */
         @media (max-width: 600px) {
-            .message {
-                max-width: 100%;
+            .chat-container {
+                padding: 10px;
             }
             
-            .input-container input {
+            .content {
                 font-size: 14px;
             }
             
+            .input-container input[type="text"],
             .input-container button {
                 font-size: 14px;
-                padding: 8px 16px;
             }
         }
     </style>
 {% endblock %}
 
-{% block scripts %}
-    {{ super() }} <!-- Include scripts from base.html -->
+{% block content %}
+    <div class="chat-container">
+        <div class="messages" id="messages">
+            <!-- Chat messages will be appended here -->
+        </div>
+        <div class="input-container">
+            <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
+            <button id="send-button">Send</button>
+        </div>
+    </div>
     
-    <!-- Custom JavaScript for handling chat -->
+    <!-- Display flash messages -->
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <ul style="position: fixed; top: 10px; right: 10px; list-style-type: none; padding: 0; z-index: 1000;">
+                {% for message in messages %}
+                    <li style="background-color: #f8d7da; color: #721c24; padding: 10px 20px; margin-bottom: 10px; border-radius: 5px;">
+                        {{ message }}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
+{% endblock %}
+
+{% block scripts %}
+    {{ super() }} <!-- Include any additional scripts from base.html -->
     <script>
-        document.getElementById('send-button').addEventListener('click', sendMessage);
-        document.getElementById('user-input').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
+        const sendButton = document.getElementById('send-button');
+        const userInput = document.getElementById('user-input');
+        const messagesContainer = document.getElementById('messages');
+
+        // Function to append messages to the chat container
+        function appendMessage(sender, content) {
+            const messageElement = document.createElement('div');
+            messageElement.classList.add('message', sender);
+            
+            const contentElement = document.createElement('div');
+            contentElement.classList.add('content');
+            contentElement.textContent = content;
+            
+            messageElement.appendChild(contentElement);
+            messagesContainer.appendChild(messageElement);
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
+        }
+
+        // Function to update the last AI message with streaming content
+        function updateLastMessage(sender, content) {
+            const messages = messagesContainer.getElementsByClassName('message');
+            if (messages.length === 0) return;
+            const lastMessage = messages[messages.length - 1];
+            if (lastMessage.classList.contains(sender)) {
+                const contentElement = lastMessage.querySelector('.content');
+                contentElement.textContent = content;
+                messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }
-        });
-        
-        function sendMessage() {
-            const userInput = document.getElementById('user-input').value.trim();
-            if (userInput === '') return;
+        }
+
+        // Event listener for the Send button
+        sendButton.addEventListener('click', () => {
+            const message = userInput.value.trim();
+            if (message === '') return;
             
-            appendMessage(userInput, 'user');
-            document.getElementById('user-input').value = '';
-            
-            // Send the message to the server
-            fetch('/get_response', {
+            // Append user's message to the chat
+            appendMessage('user', message);
+            userInput.value = '';
+            sendButton.disabled = true;
+
+            // Initiate streaming response from the server
+            fetch('{{ url_for("stream_response") }}', {
                 method: 'POST',
                 headers: {
-                    'Content-Type': 'application/json',
+                    'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({ 'message': userInput }),
+                body: JSON.stringify({ message: message })
             })
-            .then(response => response.json())
-            .then(data => {
-                if (data.response) {
-                    appendMessage(data.response, 'bot');
-                } else if (data.error) {
-                    appendMessage(data.error, 'bot');
+            .then(response => {
+                if (!response.ok) {
+                    throw new Error('Network response was not ok');
                 }
+
+                const reader = response.body.getReader();
+                const decoder = new TextDecoder("utf-8");
+                let aiMessage = '';
+
+                // Append an empty AI message to start streaming
+                appendMessage('ai', '');
+
+                function readStream() {
+                    return reader.read().then(({ done, value }) => {
+                        if (done) {
+                            sendButton.disabled = false;
+                            return;
+                        }
+                        const chunk = decoder.decode(value, { stream: true });
+                        aiMessage += chunk;
+                        updateLastMessage('ai', aiMessage);
+                        return readStream();
+                    });
+                }
+
+                return readStream();
             })
-            .catch((error) => {
+            .catch(error => {
                 console.error('Error:', error);
-                appendMessage('An error occurred while processing your request.', 'bot');
+                appendMessage('ai', 'An error occurred while processing your request.');
+                sendButton.disabled = false;
             });
-        }
-        
-        function appendMessage(message, sender) {
-            const chatContainer = document.getElementById('chat-container');
-            
-            const messageDiv = document.createElement('div');
-            messageDiv.classList.add('message', sender);
-            
-            // Create avatar
-            const avatar = document.createElement('img');
-            avatar.classList.add('avatar');
-            if (sender === 'bot') {
-                avatar.src = "{{ url_for('static', filename='bot_avatar.png') }}"; // Add your bot avatar
-            } else {
-                avatar.src = "{{ url_for('static', filename='user_avatar.png') }}"; // Add your user avatar
+        });
+
+        // Allow sending message with Enter key
+        userInput.addEventListener('keypress', (e) => {
+            if (e.key === 'Enter') {
+                sendButton.click();
             }
-            
-            // Create message content
-            const contentDiv = document.createElement('div');
-            if (sender === 'bot') {
-                // Parse Markdown to HTML
-                const htmlContent = marked.parse(message, { 
-                    breaks: true,
-                    gfm: true
-                });
-                contentDiv.innerHTML = htmlContent;
-                
-                // After setting innerHTML, highlight any code blocks
-                contentDiv.querySelectorAll('pre code').forEach((block) => {
-                    hljs.highlightElement(block);
-                });
-            } else {
-                // For user messages, display as plain text
-                contentDiv.textContent = message;
-            }
-            
-            // Create timestamp
-            const timestamp = document.createElement('span');
-            timestamp.classList.add('timestamp');
-            const now = new Date();
-            const hours = now.getHours().toString().padStart(2, '0');
-            const minutes = now.getMinutes().toString().padStart(2, '0');
-            timestamp.textContent = `${hours}:${minutes}`;
-            
-            // Assemble message
-            if (sender === 'bot') {
-                messageDiv.appendChild(avatar);
-                messageDiv.appendChild(contentDiv);
-            } else {
-                messageDiv.appendChild(contentDiv);
-                messageDiv.appendChild(avatar);
-            }
-            messageDiv.appendChild(timestamp);
-            
-            chatContainer.appendChild(messageDiv);
-            chatContainer.scrollTop = chatContainer.scrollHeight;
-        }
+        });
     </script>
 {% endblock %}
