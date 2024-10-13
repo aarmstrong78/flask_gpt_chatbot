@@ -39,10 +39,10 @@ logging.basicConfig(
     level=logging.INFO,  # Set the logging level to INFO
     format='%(asctime)s [%(levelname)s] %(name)s: %(message)s',  # Define the log message format
     handlers=[
-        logging.StreamHandler()  # Log messages will be output to the console
+        logging.StreamHandler(),  # Log messages will be output to the console
+        logging.FileHandler("app.log")  # Log messages will also be saved to app.log
     ]
 )
-
 # Create a logger instance
 logger = logging.getLogger(__name__)
 
@@ -155,28 +155,83 @@ embeddings = OpenAIEmbeddings(
 def get_cached_embedding(text):
     return embeddings.embed_query(text)
 
-
-
-# Create or load the FAISS vector store
-vector_store = None
-all_documents = []
-if os.path.exists(vector_store_path):
+# After indexing or deletion, update all_documents
+def update_all_documents():
+    """
+    Fetch all current documents from the record manager.
+    """
+    global all_documents
     try:
-        vector_store = FAISS.load_local(vector_store_path, embeddings)
-        all_documents = vector_store.vectorstore.get_all_documents()
-        logger.info("Loaded existing FAISS vector store.")
+        records = record_manager.get_all_records()
+        all_documents = [
+            Document(
+                page_content=record.page_content,
+                metadata=record.metadata
+            )
+            for record in records
+        ]
+        logger.info(f"Updated all_documents list with {len(all_documents)} documents.")
     except Exception as e:
-        logger.error(f"Failed to load FAISS vector store: {e}")
-        logger.info("FAISS vector store will be initialized upon first document upload.")
-else:
-    logger.info("No existing FAISS vector store found. It will be created upon first upload.")
+        logger.error(f"Failed to update all_documents: {e}")
+        all_documents = []
 
 
-# Build a list of all current documents from the vector store
-if vector_store is not None:
-    all_documents = vector_store.vectorstore.get_all_documents()
-else:
-    all_documents = []
+# =====================
+# FAISS Vector Store Initialization
+# =====================
+
+# Initialize FAISS vector store as None; it will be loaded or created as needed
+vector_store = None
+
+def rebuild_faiss():
+    """
+    Rebuild the FAISS vector store from the documents in document_mapping.json.
+    """
+    global vector_store
+    try:
+        # Initialize FAISS vector store
+        sample_embedding = embeddings.embed_query("test")
+        embedding_dim = len(sample_embedding)
+        logger.info(f"Embedding dimension determined: {embedding_dim}")
+        
+        # Create a FAISS index
+        faiss_index = faiss.IndexFlatL2(embedding_dim)
+        vector_store = FAISS(
+            embedding_function=embeddings,
+            index=faiss_index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={}
+        )
+        
+        # Load all documents from document_mapping.json
+        with open(mapping_path, 'r') as f:
+            document_mapping = json.load(f)
+        
+        all_documents = [
+            Document(
+                page_content=doc['page_content'],
+                metadata=doc['metadata']
+            )
+            for doc in document_mapping.values()
+        ]
+        
+        # Add all documents to FAISS
+        if all_documents:
+            vector_store.add_documents(all_documents)
+            logger.info(f"Added {len(all_documents)} documents to FAISS vector store.")
+        else:
+            logger.info("No documents to add to FAISS vector store.")
+        
+        # Save the FAISS vector store to disk
+        vector_store.save_local(vector_store_path)
+        logger.info("FAISS vector store rebuilt and saved to disk.")
+    except Exception as e:
+        logger.error(f"Failed to rebuild FAISS vector store: {e}")
+        vector_store = None
+
+# =====================
+# Document Mapping Initialization
+# =====================
 
 # Load or initialize the document mapping
 if os.path.exists(mapping_path):
@@ -204,30 +259,21 @@ else:
         json.dump(document_mapping, f)
     logger.info("Initialized new document mapping.")
 
+# =====================
+# Initialize or Rebuild FAISS Vector Store
+# =====================
 
-def initialize_faiss():
-    """
-    Initialize the FAISS vector store upon the first document upload.
-    """
-    global vector_store
+if os.path.exists(vector_store_path):
     try:
-        # Determine the embedding dimension from a sample embedding
-        sample_embedding = embeddings.embed_query("test")
-        embedding_dim = len(sample_embedding)
-        logger.info(f"Embedding dimension determined: {embedding_dim}")
-        
-        # Create a FAISS index
-        faiss_index = faiss.IndexFlatL2(embedding_dim)
-        vector_store = FAISS(
-            embedding_function=embeddings,
-            index=faiss_index,
-            docstore= InMemoryDocstore(),
-            index_to_docstore_id={}
-            )
-        logger.info("FAISS vector store initialized with IndexFlatL2.")
+        vector_store = FAISS.load_local(vector_store_path, embeddings, allow_dangerous_deserialization=True)
+        logger.info("Loaded existing FAISS vector store.")
     except Exception as e:
-        logger.error(f"Failed to initialize FAISS vector store: {e}")
-        vector_store = None
+        logger.error(f"Failed to load FAISS vector store: {e}")
+        logger.info("Rebuilding FAISS vector store from document mapping.")
+        rebuild_faiss()
+else:
+    logger.info("No existing FAISS vector store found. Initializing FAISS vector store.")
+    rebuild_faiss()
 
 
 # =====================
@@ -272,10 +318,12 @@ def get_gpt_response(user_input):
         logger.error(f"An error occurred: {e}")
         return "An unexpected error occurred. Please try again later."
 
+
 def remove_document(document_id):
     """
     Remove a document and its embeddings from the FAISS vector store and document mapping.
     """
+    global vector_store
     if document_id not in document_mapping:
         logger.warning(f"Document ID {document_id} not found in mapping.")
         raise ValueError("Document ID not found.")
@@ -293,48 +341,20 @@ def remove_document(document_id):
         if doc['metadata']['source'] == source
     ]
     
-    # Perform full cleanup for this source
-    # To delete all documents from this source, pass an empty list for these documents
-    # However, the indexing API expects a full list of all documents to retain
-    # Therefore, retrieve all documents excluding those from the source to be deleted
-    all_current_docs = [
-        Document(
-            page_content=doc['page_content'],
-            metadata=doc['metadata']
-        )
-        for doc in document_mapping.values()
-    ]
-    
-    # Exclude documents from the source to be deleted
-    updated_docs = [
-        doc for doc in all_current_docs
-        if doc.metadata['source'] != source
-    ]
-    
-    # Perform full cleanup with the updated list
-    indexing_result = index(
-        updated_docs,
-        record_manager,
-        vector_store,
-        cleanup="full",
-        source_id_key="source"
-    )
-    
-    logger.info(f"Indexing result during deletion: {indexing_result}")
-    
-    # Remove all documents associated with this source from the local mapping
-    to_delete = [doc_id for doc_id, doc in document_mapping.items() if doc['metadata']['source'] == source]
-    for doc_id in to_delete:
+    # Remove documents from document_mapping.json
+    to_delete_ids = [doc_id for doc_id, doc in document_mapping.items() if doc['metadata']['source'] == source]
+    for doc_id in to_delete_ids:
         del document_mapping[doc_id]
+    logger.info(f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping.")
     
     # Save the updated document mapping
     with open(mapping_path, 'w') as f:
         json.dump(document_mapping, f)
     
-    # Save the FAISS vector store to disk
-    if vector_store is not None:
-        vector_store.save_local(vector_store_path)
-        logger.info("FAISS vector store saved to disk after deletion.")
+    # Rebuild FAISS vector store to reflect deletions
+    logger.info("Rebuilding FAISS vector store to reflect deletions.")
+    rebuild_faiss()
+
 
 # After indexing or deletion, update all_documents
 def update_all_documents():
@@ -368,8 +388,9 @@ def upload_page():
     """
     Render the upload page via a GET request.
     """
-    return render_template('upload.html')
-
+    # Get unique sources
+    unique_sources = list(set([doc['metadata']['source'] for doc in document_mapping.values()]))
+    return render_template('upload.html', sources=unique_sources)
 
 
 @app.route('/upload', methods=['POST'])
@@ -383,7 +404,7 @@ def upload_file():
     if 'file' not in request.files:
         flash('No file part')
         logger.warning("No file part in the request.")
-        redirect(url_for('upload_page'))
+        return redirect(url_for('upload_page'))
     
     file = request.files['file']
     
@@ -391,7 +412,7 @@ def upload_file():
     if file.filename == '':
         flash('No selected file')
         logger.warning("No file selected for upload.")
-        redirect(url_for('upload_page'))
+        return redirect(url_for('upload_page'))
     
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
@@ -407,16 +428,17 @@ def upload_file():
         except ValueError as ve:
             flash(str(ve))
             logger.error(f"Error extracting text: {ve}")
-            redirect(url_for('upload_page'))
+            return redirect(url_for('upload_page'))
         
         if texts:
             try:
                 # Initialize FAISS vector store if it's None
                 if vector_store is None:
-                    initialize_faiss()
+                    logger.info("FAISS vector store is not initialized. Rebuilding FAISS vector store.")
+                    rebuild_faiss()
                     if vector_store is None:
                         flash("Failed to initialize the vector store. Please check the logs.")
-                        redirect(url_for('upload_page'))
+                        return redirect(url_for('upload_page'))
                 
                 # Create Document objects with 'source' metadata
                 source_id = filename  # Using filename as the source identifier
@@ -425,16 +447,10 @@ def upload_file():
                     for text in texts
                 ]
                 
-                # Index the new documents with 'incremental' cleanup
-                indexing_result = index(
-                    new_documents,
-                    record_manager,
-                    vector_store,
-                    cleanup="incremental",
-                    source_id_key="source"
-                )
-                
-                logger.info(f"Indexing result: {indexing_result}")
+                # Add new documents to FAISS vector store
+                if vector_store is not None:
+                    vector_store.add_documents(new_documents)
+                    logger.info(f"Added {len(new_documents)} new documents to FAISS vector store.")
                 
                 # Update the local document mapping
                 for doc in new_documents:
@@ -448,12 +464,14 @@ def upload_file():
                 # Save the updated document mapping
                 with open(mapping_path, 'w') as f:
                     json.dump(document_mapping, f)
-
+    
                 # Save the FAISS vector store to disk
                 if vector_store is not None:
                     vector_store.save_local(vector_store_path)
                     logger.info("FAISS vector store saved to disk after upload.")
                 
+                # Update all_documents list if needed (Not used anymore)
+                # update_all_documents()  # Removed as we rely on document_mapping.json
                 
                 flash('File content integrated into context')
             except RateLimitError as e:
@@ -471,6 +489,7 @@ def upload_file():
         flash('Allowed file types are pdf, docx, txt')
         logger.warning(f"Attempted to upload unsupported file type: {file.filename}")
         return redirect(url_for('upload_page'))
+
 
 @app.route('/chat', methods=['GET'])
 def chat():
@@ -511,6 +530,56 @@ def remove_document_route():
     except Exception as e:
         logger.error(f"Error removing document {document_id}: {e}")
         return jsonify({'error': 'Failed to remove document.'}), 500
+
+@app.route('/delete_sources', methods=['POST'])
+def delete_sources():
+    """
+    Handle deletion of selected sources.
+    Expects form data with 'sources' as a list of source names.
+    """
+    selected_sources = request.form.getlist('sources')
+    
+    if not selected_sources:
+        flash("No sources selected for deletion.")
+        logger.warning("No sources selected for deletion.")
+        return redirect(url_for('upload_page'))
+    
+    try:
+        # Fetch all current documents
+        all_current_docs = [
+            Document(
+                page_content=doc['page_content'],
+                metadata=doc['metadata']
+            )
+            for doc in document_mapping.values()
+        ]
+        
+        # Exclude documents from the selected sources
+        updated_docs = [
+            doc for doc in all_current_docs
+            if doc.metadata['source'] not in selected_sources
+        ]
+        
+        # Rebuild FAISS vector store with the updated documents
+        logger.info("Rebuilding FAISS vector store after source deletions.")
+        vector_store = None  # Reset FAISS vector store
+        with open(mapping_path, 'w') as f:
+            # Remove documents associated with selected sources
+            to_delete_ids = [doc_id for doc_id, doc in document_mapping.items() if doc['metadata']['source'] in selected_sources]
+            for doc_id in to_delete_ids:
+                del document_mapping[doc_id]
+            # Save the updated document mapping
+            json.dump(document_mapping, f)
+        
+        # Rebuild FAISS vector store
+        rebuild_faiss()
+        
+        flash("Selected sources have been successfully deleted.")
+        return redirect(url_for('upload_page'))
+    except Exception as e:
+        logger.error(f"Error deleting selected sources: {e}")
+        flash("An error occurred while deleting selected sources. Please try again.")
+        return redirect(url_for('upload_page'))
 
 
 # =====================
