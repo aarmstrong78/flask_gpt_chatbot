@@ -5,7 +5,7 @@
     <!-- Additional head elements specific to upload page can go here -->
     <style>
         /* Styles specific to the upload page */
-        .upload-container {
+        .upload-container, .manage-container {
             flex: 1;
             padding: 40px;
             display: flex;
@@ -14,18 +14,21 @@
             justify-content: center;
         }
         
-        .upload-container form {
+        .upload-container form, .manage-container form {
             display: flex;
             flex-direction: column;
             align-items: center;
+            width: 100%;
+            max-width: 600px;
         }
         
         .upload-container input[type="file"] {
             margin-bottom: 20px;
             padding: 10px;
+            width: 100%;
         }
         
-        .upload-container input[type="submit"] {
+        .upload-container input[type="submit"], .manage-container input[type="submit"] {
             padding: 10px 20px;
             font-size: 16px;
             border: none;
@@ -33,14 +36,65 @@
             background-color: #4CAF50;
             color: white;
             cursor: pointer;
+            width: 100%;
+            max-width: 200px;
         }
         
-        .upload-container input[type="submit"]:hover {
+        .upload-container input[type="submit"]:hover, .manage-container input[type="submit"]:hover {
             background-color: #45a049;
+        }
+        
+        /* Styles for Manage Existing Documents Section */
+        .manage-container {
+            background-color: #f9f9f9;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
+            margin-top: 40px;
+        }
+        
+        .manage-container h2 {
+            margin-bottom: 20px;
+            color: #333;
+        }
+        
+        .manage-container table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 20px;
+        }
+        
+        .manage-container th, .manage-container td {
+            border: 1px solid #ddd;
+            padding: 12px;
+            text-align: left;
+        }
+        
+        .manage-container th {
+            background-color: #f2f2f2;
+        }
+        
+        .manage-container input[type="checkbox"] {
+            transform: scale(1.2);
+        }
+        
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            .upload-container, .manage-container {
+                padding: 20px;
+            }
+            
+            .manage-container table, .manage-container th, .manage-container td {
+                font-size: 14px;
+            }
+            
+            .upload-container input[type="submit"], .manage-container input[type="submit"] {
+                font-size: 14px;
+                padding: 8px 16px;
+            }
         }
     </style>
 {% endblock %}
-
 
 {% block content %}
     <div class="upload-container">
@@ -49,23 +103,60 @@
             <input type="file" name="file" accept=".pdf,.docx,.txt" required>
             <input type="submit" value="Upload">
         </form>
-    
-        <!-- Display flash messages -->
-        {% with messages = get_flashed_messages() %}
-            {% if messages %}
-                <ul style="margin-top: 20px; list-style-type: none; padding: 0;">
-                    {% for message in messages %}
-                        <li style="background-color: #f8d7da; color: #721c24; padding: 10px; margin-bottom: 10px; border-radius: 5px;">
-                            {{ message }}
-                        </li>
-                    {% endfor %}
-                </ul>
-            {% endif %}
-        {% endwith %}
     </div>
+    
+    <div class="manage-container">
+        <h2>Manage Existing Documents</h2>
+        {% if sources %}
+            <form action="{{ url_for('delete_sources') }}" method="post" onsubmit="return confirmDelete();">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Select</th>
+                            <th>Source Document</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for source in sources %}
+                            <tr>
+                                <td><input type="checkbox" name="sources" value="{{ source }}"></td>
+                                <td>{{ source }}</td>
+                            </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                <input type="submit" value="Delete Selected Sources">
+            </form>
+        {% else %}
+            <p>No documents uploaded yet.</p>
+        {% endif %}
+    </div>
+    
+    <!-- Display flash messages -->
+    {% with messages = get_flashed_messages() %}
+        {% if messages %}
+            <ul style="margin-top: 20px; list-style-type: none; padding: 0;">
+                {% for message in messages %}
+                    <li style="background-color: #f8d7da; color: #721c24; padding: 10px; margin-bottom: 10px; border-radius: 5px;">
+                        {{ message }}
+                    </li>
+                {% endfor %}
+            </ul>
+        {% endif %}
+    {% endwith %}
 {% endblock %}
 
 {% block scripts %}
     {{ super() }} <!-- Include scripts from base.html -->
     <!-- Additional scripts if necessary -->
+    <script>
+        function confirmDelete() {
+            const checkboxes = document.querySelectorAll('input[name="sources"]:checked');
+            if (checkboxes.length === 0) {
+                alert('Please select at least one source to delete.');
+                return false;
+            }
+            return confirm('Are you sure you want to delete the selected sources? This action cannot be undone.');
+        }
+    </script>
 {% endblock %}
