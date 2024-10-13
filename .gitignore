@@ -4,6 +4,7 @@ __pycache__/
 *.pyo
 *.pyd
 *.env
+*.log
 
 # Virtual environment
 venv/
