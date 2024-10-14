@@ -116,6 +116,7 @@ memory = ConversationBufferMemory()
 llm = ChatOpenAI(
     temperature=0.7,
     model_name="gpt-4o",
+    #model_name="o1-mini",
     streaming=True  # Enable streaming
 )
 
