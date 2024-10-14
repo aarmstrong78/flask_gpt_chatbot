@@ -2,7 +2,7 @@
 {% extends "base.html" %}
 
 {% block head %}
-    {{ super() }} <!-- Include any additional head elements from base.html -->
+    {{ super() }} <!-- Retain any existing head elements from base.html -->
     <style>
         /* Styles specific to the chat page */
         .chat-container {
@@ -10,9 +10,9 @@
             flex-direction: column;
             height: 80vh;
             max-width: 800px;
-            margin: 0 auto;
+            margin: 10px auto;
             padding: 20px;
-            background-color: #ffffff;
+            background-color: #e1b382;
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
@@ -28,17 +28,18 @@
             margin-bottom: 15px;
             display: flex;
             flex-direction: column;
+            position: relative; /* For positioning copy buttons */
         }
         
         .message.user .content {
             align-self: flex-end;
-            background-color: #dcf8c6;
+            background-color: #f8d9bc;
             color: #000;
         }
         
         .message.ai .content {
             align-self: flex-start;
-            background-color: #f1f0f0;
+            background-color: #f1f0f0; 
             color: #000;
         }
         
@@ -49,6 +50,36 @@
             word-wrap: break-word;
             font-size: 16px;
             line-height: 1.4;
+            position: relative; /* For positioning copy buttons */
+        }
+
+
+        .code-block {
+            position: relative; /* Necessary for absolute positioning of the copy button */
+            margin: 10px 0; /* Optional: Add some spacing around code blocks */
+        }
+
+        .copy-button {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            padding: 5px 10px;
+            font-size: 12px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            background-color: #4CAF50;
+            color: white;
+            display: none; /* Hidden by default */
+            opacity: 0.8;
+            z-index: 10; /* Ensure the button appears above the code block */
+        }
+
+        /* Show the copy button when hovering over the code block */
+        .code-block:hover .copy-button,
+        .copy-button:hover {
+            display: block; /* Show the button when hovering over the code block or the button itself */
+            opacity: 1;
         }
         
         .input-container {
@@ -69,7 +100,7 @@
             padding: 10px 20px;
             border: none;
             border-radius: 20px;
-            background-color: #4CAF50;
+            background-color: #2d545e;
             color: white;
             font-size: 16px;
             cursor: pointer;
@@ -82,7 +113,7 @@
         }
         
         .input-container button:hover:not(:disabled) {
-            background-color: #45a049;
+            background-color: #12343b;
         }
         
         /* Scrollbar styling for messages */
@@ -111,6 +142,16 @@
             }
         }
     </style>
+    <!-- Include Marked.js for Markdown parsing -->
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- Include DOMPurify for sanitizing HTML -->
+    <script src="https://cdn.jsdelivr.net/npm/dompurify@2.3.10/dist/purify.min.js"></script>
+    <!-- Include Highlight.js for syntax highlighting -->
+    <link rel="stylesheet"
+          href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/styles/tokyo-night-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.8.0/highlight.min.js"></script>
+    <!-- Initialize Highlight.js -->
+    <script>hljs.highlightAll();</script>
 {% endblock %}
 
 {% block content %}
@@ -139,7 +180,7 @@
 {% endblock %}
 
 {% block scripts %}
-    {{ super() }} <!-- Include any additional scripts from base.html -->
+    {{ super() }} <!-- Retain any existing scripts from base.html -->
     <script>
         const sendButton = document.getElementById('send-button');
         const userInput = document.getElementById('user-input');
@@ -149,11 +190,49 @@
         function appendMessage(sender, content) {
             const messageElement = document.createElement('div');
             messageElement.classList.add('message', sender);
-            
+
             const contentElement = document.createElement('div');
             contentElement.classList.add('content');
-            contentElement.textContent = content;
-            
+
+            if (sender === 'ai') {
+                // Parse Markdown to HTML with GitHub-flavored Markdown
+                const rawHtml = marked.parse(content, { 
+                    gfm: true,
+                    highlight: function(code, lang) {
+                        if (lang && hljs.getLanguage(lang)) {
+                            return hljs.highlight(code, { language: lang }).value;
+                        } else {
+                            return hljs.highlightAuto(code).value;
+                        }
+                    }
+                });
+                // Sanitize the HTML
+                const cleanHtml = DOMPurify.sanitize(rawHtml);
+                // Set the sanitized HTML
+                contentElement.innerHTML = cleanHtml;
+
+                // Wrap code blocks in .code-block divs and add copy buttons
+                contentElement.querySelectorAll('pre').forEach((preElement) => {
+                    const codeBlockContainer = document.createElement('div');
+                    codeBlockContainer.classList.add('code-block');
+
+                    // Move the <pre> element inside the .code-block container
+                    preElement.parentNode.replaceChild(codeBlockContainer, preElement);
+                    codeBlockContainer.appendChild(preElement);
+
+                    // Highlight the code block
+                    preElement.querySelectorAll('code').forEach((codeElement) => {
+                        hljs.highlightElement(codeElement);
+                    });
+
+                    // Add the copy button
+                    addCopyButton(preElement.querySelector('code'), codeBlockContainer);
+                });
+            } else {
+                // For user messages, set as plain text
+                contentElement.textContent = content;
+            }
+
             messageElement.appendChild(contentElement);
             messagesContainer.appendChild(messageElement);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
@@ -166,16 +245,75 @@
             const lastMessage = messages[messages.length - 1];
             if (lastMessage.classList.contains(sender)) {
                 const contentElement = lastMessage.querySelector('.content');
-                contentElement.textContent = content;
+                if (sender === 'ai') {
+                    // Parse and sanitize the updated content
+                    const rawHtml = marked.parse(content, { 
+                        gfm: true,
+                        highlight: function(code, lang) {
+                            if (lang && hljs.getLanguage(lang)) {
+                                return hljs.highlight(code, { language: lang }).value;
+                            } else {
+                                return hljs.highlightAuto(code).value;
+                            }
+                        }
+                    });
+                    const cleanHtml = DOMPurify.sanitize(rawHtml);
+                    contentElement.innerHTML = cleanHtml;
+
+                    // Wrap code blocks in .code-block divs and add copy buttons
+                    contentElement.querySelectorAll('pre').forEach((preElement) => {
+                        const codeBlockContainer = document.createElement('div');
+                        codeBlockContainer.classList.add('code-block');
+
+                        // Move the <pre> element inside the .code-block container
+                        preElement.parentNode.replaceChild(codeBlockContainer, preElement);
+                        codeBlockContainer.appendChild(preElement);
+
+                        // Highlight the code block
+                        preElement.querySelectorAll('code').forEach((codeElement) => {
+                            hljs.highlightElement(codeElement);
+                        });
+
+                        // Add the copy button
+                        addCopyButton(preElement.querySelector('code'), codeBlockContainer);
+                    });
+                } else {
+                    contentElement.textContent = content;
+                }
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
             }
+        }
+
+        // Function to add copy buttons to code blocks
+        function addCopyButton(codeBlock, codeBlockContainer) {
+            // Check if a copy button already exists
+            if (codeBlockContainer.querySelector('.copy-button')) return;
+
+            const button = document.createElement('button');
+            button.textContent = 'Copy';
+            button.classList.add('copy-button');
+
+            // Copy functionality
+            button.addEventListener('click', () => {
+                navigator.clipboard.writeText(codeBlock.textContent).then(() => {
+                    button.textContent = 'Copied!';
+                    setTimeout(() => {
+                        button.textContent = 'Copy';
+                    }, 2000);
+                }).catch(err => {
+                    console.error('Could not copy text: ', err);
+                });
+            });
+
+            // Append the button to the code block's container
+            codeBlockContainer.appendChild(button);
         }
 
         // Event listener for the Send button
         sendButton.addEventListener('click', () => {
             const message = userInput.value.trim();
             if (message === '') return;
-            
+
             // Append user's message to the chat
             appendMessage('user', message);
             userInput.value = '';
