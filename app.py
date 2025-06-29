@@ -70,6 +70,10 @@ ALLOWED_EXTENSIONS = {'pdf', 'docx', 'txt'}
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB limit
 
+# Ensure necessary directories exist
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs('data', exist_ok=True)
+
 # =====================
 # Caching Configuration
 # =====================
@@ -617,6 +621,7 @@ def delete_sources():
     Handle deletion of selected sources.
     Expects form data with 'sources' as a list of source names.
     """
+    global vector_store
     selected_sources = request.form.getlist('sources')
     
     if not selected_sources:
