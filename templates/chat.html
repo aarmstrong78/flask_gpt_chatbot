@@ -12,7 +12,7 @@
             max-width: 800px;
             margin: 10px auto;
             padding: 20px;
-            background-color: #e1b382;
+            background-color: var(--panel-bg);
             border-radius: 8px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
@@ -24,23 +24,29 @@
             padding-right: 10px;
         }
         
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
         .message {
             margin-bottom: 15px;
             display: flex;
             flex-direction: column;
             position: relative; /* For positioning copy buttons */
+            animation: fadeIn 0.3s ease;
         }
         
         .message.user .content {
             align-self: flex-end;
-            background-color: #f8d9bc;
-            color: #000;
+            background-color: var(--message-user-bg);
+            color: var(--text-color);
         }
         
         .message.ai .content {
             align-self: flex-start;
-            background-color: #f1f0f0; 
-            color: #000;
+            background-color: var(--message-ai-bg);
+            color: var(--text-color);
         }
         
         .content {
@@ -75,6 +81,20 @@
             z-index: 10; /* Ensure the button appears above the code block */
         }
 
+        .scroll-bottom {
+            position: fixed;
+            bottom: 90px;
+            right: 20px;
+            padding: 8px 10px;
+            border: none;
+            border-radius: 50%;
+            background-color: var(--button-bg);
+            color: white;
+            cursor: pointer;
+            display: none;
+            z-index: 100;
+        }
+
         /* Show the copy button when hovering over the code block */
         .code-block:hover .copy-button,
         .copy-button:hover {
@@ -94,13 +114,15 @@
             border-radius: 20px;
             outline: none;
             font-size: 16px;
+            background-color: var(--input-bg);
+            color: var(--text-color);
         }
         
         .input-container button {
             padding: 10px 20px;
             border: none;
             border-radius: 20px;
-            background-color: #2d545e;
+            background-color: var(--button-bg);
             color: white;
             font-size: 16px;
             cursor: pointer;
@@ -113,7 +135,7 @@
         }
         
         .input-container button:hover:not(:disabled) {
-            background-color: #12343b;
+            background-color: var(--button-hover);
         }
         
         /* Scrollbar styling for messages */
@@ -159,6 +181,7 @@
         <div class="messages" id="messages">
             <!-- Chat messages will be appended here -->
         </div>
+        <button id="scroll-bottom" class="scroll-bottom" aria-label="Scroll to bottom">⬇</button>
         <div class="input-container">
             <input type="text" id="user-input" placeholder="Type your message here..." autocomplete="off">
             <button id="send-button">Send</button>
@@ -185,6 +208,7 @@
         const sendButton = document.getElementById('send-button');
         const userInput = document.getElementById('user-input');
         const messagesContainer = document.getElementById('messages');
+        const scrollButton = document.getElementById('scroll-bottom');
 
         // Function to append messages to the chat container
         function appendMessage(sender, content) {
@@ -236,6 +260,7 @@
             messageElement.appendChild(contentElement);
             messagesContainer.appendChild(messageElement);
             messagesContainer.scrollTop = messagesContainer.scrollHeight;
+            scrollButton.style.display = 'none';
         }
 
         // Function to update the last AI message with streaming content
@@ -281,6 +306,7 @@
                     contentElement.textContent = content;
                 }
                 messagesContainer.scrollTop = messagesContainer.scrollHeight;
+                scrollButton.style.display = 'none';
             }
         }
 
@@ -366,6 +392,18 @@
             if (e.key === 'Enter') {
                 sendButton.click();
             }
+        });
+
+        messagesContainer.addEventListener('scroll', () => {
+            if (messagesContainer.scrollTop + messagesContainer.clientHeight < messagesContainer.scrollHeight - 50) {
+                scrollButton.style.display = 'block';
+            } else {
+                scrollButton.style.display = 'none';
+            }
+        });
+
+        scrollButton.addEventListener('click', () => {
+            messagesContainer.scrollTop = messagesContainer.scrollHeight;
         });
     </script>
 {% endblock %}
