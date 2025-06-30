@@ -174,9 +174,8 @@ vector_store = None
 
 
 def rebuild_faiss():
-    """
-    Rebuild the FAISS vector store from the documents in document_mapping.json.
-    """
+    """Rebuild the FAISS vector store from ``document_mapping.json``."""
+    global vector_store, document_mapping
     try:
         # Initialize FAISS vector store
         sample_embedding = embeddings.embed_query("test")
