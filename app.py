@@ -84,8 +84,11 @@ cache = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
 # =====================
 
 
-# Initialize OpenAI API key
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# Initialize OpenAI API key and validate presence
+openai_api_key = os.getenv("OPENAI_API_KEY")
+if not openai_api_key:
+    raise RuntimeError("OPENAI_API_KEY environment variable is required")
+openai.api_key = openai_api_key
 
 
 def allowed_file(filename):
@@ -121,6 +124,7 @@ llm = ChatOpenAI(
     model_name="gpt-4o",
     # model_name="o1-mini",
     streaming=True,  # Enable streaming
+    openai_api_key=openai_api_key,
 )
 
 conversation = ConversationChain(llm=llm, memory=memory)
