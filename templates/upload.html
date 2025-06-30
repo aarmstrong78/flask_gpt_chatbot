@@ -2,33 +2,37 @@
 {% extends "base.html" %}
 
 {% block head %}
-    <!-- Additional head elements specific to upload page can go here -->
     <style>
         /* Styles specific to the upload page */
-        .upload-container, .manage-container {
-            flex: 1;
-            padding: 40px;
+        .page-wrapper {
             display: flex;
-            flex-direction: column;
-            align-items: center;
+            flex-wrap: wrap;
             justify-content: center;
+            gap: 40px;
+            padding: 20px;
         }
-        
-        .upload-container form, .manage-container form {
+
+        .card {
+            background-color: var(--panel-bg);
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            width: 100%;
+            max-width: 500px;
+        }
+
+        .card form {
             display: flex;
             flex-direction: column;
-            align-items: center;
+            gap: 15px;
             width: 100%;
-            max-width: 600px;
         }
-        
-        .upload-container input[type="file"] {
-            margin-bottom: 20px;
+
+        .card input[type="file"] {
             padding: 10px;
-            width: 100%;
         }
-        
-        .upload-container input[type="submit"], .manage-container input[type="submit"] {
+
+        .card input[type="submit"] {
             padding: 10px 20px;
             font-size: 16px;
             border: none;
@@ -36,76 +40,61 @@
             background-color: var(--button-bg);
             color: white;
             cursor: pointer;
-            width: 100%;
-            max-width: 200px;
         }
-        
-        .upload-container input[type="submit"]:hover, .manage-container input[type="submit"]:hover {
+
+        .card input[type="submit"]:hover {
             background-color: var(--button-hover);
         }
-        
-        /* Styles for Manage Existing Documents Section */
-        .manage-container {
-            background-color: var(--panel-bg);
-            padding: 30px;
-            border-radius: 10px;
-            box-shadow: 0 0 10px rgba(0, 0, 0, 0.1);
-            margin-top: 40px;
-        }
-        
-        .manage-container h2 {
-            margin-bottom: 20px;
-            color: #333;
-        }
-        
+
         .manage-container table {
             width: 100%;
             border-collapse: collapse;
             margin-bottom: 20px;
         }
-        
-        .manage-container th, .manage-container td {
+
+        .manage-container th,
+        .manage-container td {
             border: 1px solid #ddd;
             padding: 12px;
             text-align: left;
         }
-        
+
         .manage-container th {
             background-color: #f2f2f2;
         }
-        
+
         .manage-container input[type="checkbox"] {
             transform: scale(1.2);
         }
-        
-        /* Responsive Design */
-        @media (max-width: 768px) {
-            .upload-container, .manage-container {
+
+        @media (max-width: 600px) {
+            .card {
                 padding: 20px;
             }
-            
-            .manage-container table, .manage-container th, .manage-container td {
+
+            .card input[type="submit"] {
                 font-size: 14px;
             }
-            
-            .upload-container input[type="submit"], .manage-container input[type="submit"] {
+
+            .manage-container th,
+            .manage-container td {
                 font-size: 14px;
-                padding: 8px 16px;
             }
         }
     </style>
 {% endblock %}
 
 {% block content %}
-    <div class="upload-container">
+    <div class="page-wrapper">
+    <div class="card upload-container">
         <h2>Upload Your Documents</h2>
         <form action="{{ url_for('upload_file') }}" method="post" enctype="multipart/form-data">
             <input type="file" name="file" accept=".pdf,.docx,.txt" required>
             <input type="submit" value="Upload">
         </form>
     </div>
-    
-    <div class="manage-container">
+
+    <div class="card manage-container">
         <h2>Manage Existing Documents</h2>
         {% if sources %}
             <form action="{{ url_for('delete_sources') }}" method="post" onsubmit="return confirmDelete();">
@@ -130,6 +119,7 @@
         {% else %}
             <p>No documents uploaded yet.</p>
         {% endif %}
+    </div>
     </div>
     
     <!-- Display flash messages -->
