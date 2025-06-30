@@ -4,7 +4,16 @@ import os
 import openai
 from openai import RateLimitError
 
-from flask import Flask, Response, render_template, request, redirect, url_for, flash, jsonify
+from flask import (
+    Flask,
+    Response,
+    render_template,
+    request,
+    redirect,
+    url_for,
+    flash,
+    jsonify,
+)
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
@@ -13,7 +22,11 @@ from langchain_core.documents import Document
 
 from langchain_openai import ChatOpenAI
 from langchain.memory import ConversationBufferMemory
-from langchain_community.document_loaders import PyPDFLoader, UnstructuredWordDocumentLoader, TextLoader
+from langchain_community.document_loaders import (
+    PyPDFLoader,
+    UnstructuredWordDocumentLoader,
+    TextLoader,
+)
 from langchain.text_splitter import CharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
@@ -79,6 +92,9 @@ os.makedirs("data", exist_ok=True)
 # Initialize embedding cache with TTL of 1 hour and max size of 1000
 cache = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
 
+# Cache for similarity searches to reduce FAISS queries
+similarity_cache = TTLCache(maxsize=1000, ttl=600)  # 10-minute TTL
+
 # =====================
 # Helper Functions
 # =====================
@@ -112,7 +128,9 @@ def extract_text(file_path, filename):
 
     # Log the extracted texts
     for idx, text in enumerate(texts):
-        logger.info(f"Text chunk {idx + 1}: {text.page_content[:100]}...")  # Log first 100 chars
+        logger.info(
+            f"Text chunk {idx + 1}: {text.page_content[:100]}..."
+        )  # Log first 100 chars
 
     return texts
 
@@ -142,15 +160,21 @@ namespace = "faiss/convodocs"  # Define a namespace for your application
 
 if os.path.exists(record_manager_path):
     try:
-        record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+        record_manager = SQLRecordManager(
+            namespace, db_url=f"sqlite:///{record_manager_path}"
+        )
         logger.info("Loaded existing SQLRecordManager.")
     except Exception as e:
         logger.error(f"Failed to load SQLRecordManager: {e}")
-        record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+        record_manager = SQLRecordManager(
+            namespace, db_url=f"sqlite:///{record_manager_path}"
+        )
         record_manager.create_schema()
         logger.info("Initialized new SQLRecordManager with schema.")
 else:
-    record_manager = SQLRecordManager(namespace, db_url=f"sqlite:///{record_manager_path}")
+    record_manager = SQLRecordManager(
+        namespace, db_url=f"sqlite:///{record_manager_path}"
+    )
     record_manager.create_schema()
     logger.info("Initialized new SQLRecordManager with schema.")
 
@@ -167,6 +191,14 @@ embeddings = OpenAIEmbeddings(
 def get_cached_embedding(text):
     """Return cached embedding for the given text."""
     return embeddings.embed_query(text)
+
+
+@cached(similarity_cache)
+def cached_similarity_search(query, k=10):
+    """Return cached similar documents for the query."""
+    if vector_store is None:
+        return []
+    return vector_store.similarity_search(query, k=k)
 
 
 # =====================
@@ -189,7 +221,10 @@ def rebuild_faiss():
         # Create a FAISS index
         faiss_index = faiss.IndexFlatL2(embedding_dim)
         vector_store = FAISS(
-            embedding_function=embeddings, index=faiss_index, docstore=InMemoryDocstore(), index_to_docstore_id={}
+            embedding_function=embeddings,
+            index=faiss_index,
+            docstore=InMemoryDocstore(),
+            index_to_docstore_id={},
         )
 
         # Load all documents from document_mapping.json
@@ -197,7 +232,8 @@ def rebuild_faiss():
             document_mapping = json.load(f)
 
         all_documents = [
-            Document(page_content=doc["page_content"], metadata=doc["metadata"]) for doc in document_mapping.values()
+            Document(page_content=doc["page_content"], metadata=doc["metadata"])
+            for doc in document_mapping.values()
         ]
 
         # Add all documents to FAISS
@@ -232,13 +268,17 @@ if os.path.exists(mapping_path):
                 document_mapping = {}
                 with open(mapping_path, "w") as fw:
                     json.dump(document_mapping, fw)
-                logger.warning("document_mapping.json was empty. Initialized as empty dictionary.")
+                logger.warning(
+                    "document_mapping.json was empty. Initialized as empty dictionary."
+                )
     except json.JSONDecodeError:
         # JSON is malformed, initialize empty dict
         document_mapping = {}
         with open(mapping_path, "w") as fw:
             json.dump(document_mapping, fw)
-        logger.error("document_mapping.json was malformed. Reinitialized as empty dictionary.")
+        logger.error(
+            "document_mapping.json was malformed. Reinitialized as empty dictionary."
+        )
 else:
     document_mapping = {}
     with open(mapping_path, "w") as f:
@@ -251,14 +291,18 @@ else:
 
 if os.path.exists(vector_store_path):
     try:
-        vector_store = FAISS.load_local(vector_store_path, embeddings, allow_dangerous_deserialization=True)
+        vector_store = FAISS.load_local(
+            vector_store_path, embeddings, allow_dangerous_deserialization=True
+        )
         logger.info("Loaded existing FAISS vector store.")
     except Exception as e:
         logger.error(f"Failed to load FAISS vector store: {e}")
         logger.info("Rebuilding FAISS vector store from document mapping.")
         rebuild_faiss()
 else:
-    logger.info("No existing FAISS vector store found. Initializing FAISS vector store.")
+    logger.info(
+        "No existing FAISS vector store found. Initializing FAISS vector store."
+    )
     rebuild_faiss()
 
 
@@ -273,8 +317,8 @@ def get_gpt_response(user_input):
     """
     try:
         if vector_store is not None:
-            # Retrieve relevant context from vector store
-            relevant_docs = vector_store.similarity_search(user_input, k=10)
+            # Retrieve relevant context from vector store with caching
+            relevant_docs = cached_similarity_search(user_input, k=10)
             context = "\n".join([doc.page_content for doc in relevant_docs])
 
             # Log the retrieved context
@@ -316,8 +360,8 @@ def get_gpt_response_stream(user_input):
     """
     try:
         if vector_store is not None:
-            # Retrieve relevant context from vector store
-            relevant_docs = vector_store.similarity_search(user_input, k=10)
+            # Retrieve relevant context from vector store with caching
+            relevant_docs = cached_similarity_search(user_input, k=10)
             context = "\n".join([doc.page_content for doc in relevant_docs])
 
             # Log the retrieved context
@@ -383,10 +427,16 @@ def remove_document(document_id):
     source = document_mapping[document_id]["metadata"]["source"]
 
     # Remove documents from document_mapping.json
-    to_delete_ids = [doc_id for doc_id, doc in document_mapping.items() if doc["metadata"]["source"] == source]
+    to_delete_ids = [
+        doc_id
+        for doc_id, doc in document_mapping.items()
+        if doc["metadata"]["source"] == source
+    ]
     for doc_id in to_delete_ids:
         del document_mapping[doc_id]
-    logger.info(f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping.")
+    logger.info(
+        f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping."
+    )
 
     # Save the updated document mapping
     with open(mapping_path, "w") as f:
@@ -405,7 +455,10 @@ def update_all_documents():
     global all_documents
     try:
         records = record_manager.get_all_records()
-        all_documents = [Document(page_content=record.page_content, metadata=record.metadata) for record in records]
+        all_documents = [
+            Document(page_content=record.page_content, metadata=record.metadata)
+            for record in records
+        ]
         logger.info(f"Updated all_documents list with {len(all_documents)} documents.")
     except Exception as e:
         logger.error(f"Failed to update all_documents: {e}")
@@ -426,7 +479,9 @@ def upload_page():
     Render the upload page via a GET request.
     """
     # Get unique sources
-    unique_sources = list(set([doc["metadata"]["source"] for doc in document_mapping.values()]))
+    unique_sources = list(
+        set([doc["metadata"]["source"] for doc in document_mapping.values()])
+    )
     return render_template("upload.html", sources=unique_sources)
 
 
@@ -470,22 +525,31 @@ def upload_file():
             try:
                 # Initialize FAISS vector store if it's None
                 if vector_store is None:
-                    logger.info("FAISS vector store is not initialized. Rebuilding FAISS vector store.")
+                    logger.info(
+                        "FAISS vector store is not initialized. Rebuilding FAISS vector store."
+                    )
                     rebuild_faiss()
                     if vector_store is None:
-                        flash("Failed to initialize the vector store. Please check the logs.")
+                        flash(
+                            "Failed to initialize the vector store. Please check the logs."
+                        )
                         return redirect(url_for("upload_page"))
 
                 # Create Document objects with 'source' metadata
                 source_id = filename  # Using filename as the source identifier
                 new_documents = [
-                    Document(page_content=text.page_content, metadata={"source": source_id}) for text in texts
+                    Document(
+                        page_content=text.page_content, metadata={"source": source_id}
+                    )
+                    for text in texts
                 ]
 
                 # Add new documents to FAISS vector store
                 if vector_store is not None:
                     vector_store.add_documents(new_documents)
-                    logger.info(f"Added {len(new_documents)} new documents to FAISS vector store.")
+                    logger.info(
+                        f"Added {len(new_documents)} new documents to FAISS vector store."
+                    )
 
                 # Update the local document mapping
                 for doc in new_documents:
@@ -510,7 +574,9 @@ def upload_file():
 
                 flash("File content integrated into context")
             except RateLimitError as e:
-                flash("Rate limit exceeded while processing your file. Please try again later.")
+                flash(
+                    "Rate limit exceeded while processing your file. Please try again later."
+                )
                 logger.error(f"Rate limit exceeded during embedding: {e}")
             except Exception as e:
                 flash("An error occurred while processing your file. Please try again.")
@@ -578,7 +644,10 @@ def remove_document_route():
     try:
         remove_document(document_id)
         flash(f"Document {document_id} removed successfully.")
-        return jsonify({"message": f"Document {document_id} removed successfully."}), 200
+        return (
+            jsonify({"message": f"Document {document_id} removed successfully."}),
+            200,
+        )
     except ValueError as ve:
         return jsonify({"error": str(ve)}), 404
     except Exception as e:
@@ -603,7 +672,8 @@ def delete_sources():
     try:
         # Fetch all current documents
         all_current_docs = [
-            Document(page_content=doc["page_content"], metadata=doc["metadata"]) for doc in document_mapping.values()
+            Document(page_content=doc["page_content"], metadata=doc["metadata"])
+            for doc in document_mapping.values()
         ]
 
         # Rebuild FAISS vector store after removing selected sources
@@ -612,7 +682,9 @@ def delete_sources():
         with open(mapping_path, "w") as f:
             # Remove documents associated with selected sources
             to_delete_ids = [
-                doc_id for doc_id, doc in document_mapping.items() if doc["metadata"]["source"] in selected_sources
+                doc_id
+                for doc_id, doc in document_mapping.items()
+                if doc["metadata"]["source"] in selected_sources
             ]
             for doc_id in to_delete_ids:
                 del document_mapping[doc_id]
