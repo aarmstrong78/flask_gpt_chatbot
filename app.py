@@ -1,3 +1,9 @@
+"""Main application module for the Flask GPT chatbot.
+
+This file wires together the Flask routes, LangChain components and vector
+store logic used to provide a conversational interface backed by OpenAI models.
+"""
+
 # app.py
 
 import os
@@ -83,16 +89,19 @@ app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16MB limit
 
 # Ensure necessary directories exist
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# ``data`` holds the FAISS index and other persisted information
 os.makedirs("data", exist_ok=True)
 
 # =====================
 # Caching Configuration
 # =====================
 
-# Initialize embedding cache with TTL of 1 hour and max size of 1000
+# Initialize an in-memory cache for embeddings. This avoids repeatedly
+# generating embeddings for the same text within a short period.
 cache = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
 
-# Cache for similarity searches to reduce FAISS queries
+# Separate cache used for similarity search results so we don't hit the FAISS
+# index on every request.
 similarity_cache = TTLCache(maxsize=1000, ttl=600)  # 10-minute TTL
 
 # =====================
@@ -103,15 +112,24 @@ similarity_cache = TTLCache(maxsize=1000, ttl=600)  # 10-minute TTL
 # Initialize OpenAI API key and validate presence
 openai_api_key = os.getenv("OPENAI_API_KEY")
 if not openai_api_key:
+    # Fail fast if the API key is missing so the user knows to configure it
     raise RuntimeError("OPENAI_API_KEY environment variable is required")
+
+# Configure the OpenAI SDK with the provided key
 openai.api_key = openai_api_key
 
 
 def allowed_file(filename):
+    """Return ``True`` if the file has an allowed extension."""
+
+    # Ensure there is a file extension and check it against the whitelist
     return "." in filename and filename.rsplit(".", 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
 def extract_text(file_path, filename):
+    """Load the uploaded document and split it into text chunks."""
+
+    # Choose the appropriate loader based on file extension
     ext = filename.rsplit(".", 1)[1].lower()
     if ext == "pdf":
         loader = PyPDFLoader(file_path)
@@ -120,9 +138,13 @@ def extract_text(file_path, filename):
     elif ext == "txt":
         loader = TextLoader(file_path)
     else:
+        # Prevent processing of unsupported file types
         raise ValueError("Unsupported file type")
 
+    # Load the raw document data from disk
     documents = loader.load()
+
+    # Break the document into smaller chunks so embeddings are more manageable
     text_splitter = CharacterTextSplitter(chunk_size=2000, chunk_overlap=500)
     texts = text_splitter.split_documents(documents)
 
@@ -132,19 +154,24 @@ def extract_text(file_path, filename):
             f"Text chunk {idx + 1}: {text.page_content[:100]}..."
         )  # Log first 100 chars
 
+    # Return the list of Document objects generated from the uploaded file
     return texts
 
 
 # Initialize LangChain components globally
+# ``ConversationBufferMemory`` stores a history of the dialog so the LLM has
+# awareness of previous exchanges.
 memory = ConversationBufferMemory()
 llm = ChatOpenAI(
     temperature=0.7,
     model_name="gpt-4o",
     # model_name="o1-mini",
-    streaming=True,  # Enable streaming
+    streaming=True,  # Enable streaming so responses can be incrementally sent
     openai_api_key=openai_api_key,
 )
 
+# ``ConversationChain`` is a simple LangChain wrapper that handles prompt
+# formatting and keeps track of the conversation state.
 conversation = ConversationChain(llm=llm, memory=memory)
 logger.info(f"Using OpenAI model: {llm.model_name}")
 
@@ -155,6 +182,8 @@ mapping_path = "data/document_mapping.json"
 record_manager_path = "data/record_manager_cache.sql"
 
 # Initialize RecordManager
+# ``SQLRecordManager`` keeps a persistent log of indexed documents. The
+# namespace allows multiple applications to share the same underlying database.
 namespace = "faiss/convodocs"  # Define a namespace for your application
 
 
@@ -180,6 +209,7 @@ else:
 
 
 # Initialize embeddings globally
+# Embedding model used to convert text into high-dimensional vectors for FAISS
 embeddings = OpenAIEmbeddings(
     model="text-embedding-3-large",  # Specify the embedding model
     openai_api_key=os.getenv("OPENAI_API_KEY"),
@@ -196,6 +226,9 @@ def get_cached_embedding(text):
 @cached(similarity_cache)
 def cached_similarity_search(query, k=10):
     """Return cached similar documents for the query."""
+
+    # If the vector store hasn't been initialized yet we simply return an empty
+    # list. This prevents unnecessary errors early in application startup.
     if vector_store is None:
         return []
     return vector_store.similarity_search(query, k=k)
@@ -213,12 +246,13 @@ def rebuild_faiss():
     """Rebuild the FAISS vector store from ``document_mapping.json``."""
     global vector_store, document_mapping
     try:
-        # Initialize FAISS vector store
+        # Determine the dimensionality required for the FAISS index by
+        # embedding a dummy string. This avoids hardcoding the dimension.
         sample_embedding = embeddings.embed_query("test")
         embedding_dim = len(sample_embedding)
         logger.info(f"Embedding dimension determined: {embedding_dim}")
 
-        # Create a FAISS index
+        # Create a brand new FAISS index backed by an in-memory docstore
         faiss_index = faiss.IndexFlatL2(embedding_dim)
         vector_store = FAISS(
             embedding_function=embeddings,
@@ -227,7 +261,7 @@ def rebuild_faiss():
             index_to_docstore_id={},
         )
 
-        # Load all documents from document_mapping.json
+        # Load all previously stored documents from ``document_mapping.json``
         with open(mapping_path, "r") as f:
             document_mapping = json.load(f)
 
@@ -236,14 +270,14 @@ def rebuild_faiss():
             for doc in document_mapping.values()
         ]
 
-        # Add all documents to FAISS
+        # Ingest the documents into the FAISS index so they can be retrieved
         if all_documents:
             vector_store.add_documents(all_documents)
             logger.info(f"Added {len(all_documents)} documents to FAISS vector store.")
         else:
             logger.info("No documents to add to FAISS vector store.")
 
-        # Save the FAISS vector store to disk
+        # Persist the rebuilt vector store so it can be reused later
         vector_store.save_local(vector_store_path)
         logger.info("FAISS vector store rebuilt and saved to disk.")
     except Exception as e:
@@ -317,11 +351,15 @@ def get_gpt_response(user_input):
     """
     try:
         if vector_store is not None:
-            # Retrieve relevant context from vector store with caching
+            # Retrieve relevant documents from the FAISS index. These documents
+            # provide additional context to the language model.
             relevant_docs = cached_similarity_search(user_input, k=10)
+
+            # Combine the document texts into a single context string
             context = "\n".join([doc.page_content for doc in relevant_docs])
 
-            # Log the retrieved context
+            # Log a small snippet from each retrieved document so we can debug
+            # what context was supplied to the model.
             for idx, doc in enumerate(relevant_docs):
                 snippet = (
                     doc.page_content[:100].replace("\n", " ") + "..."
@@ -330,16 +368,17 @@ def get_gpt_response(user_input):
                 )
                 logger.info(f"Retrieved Doc {idx + 1}: {snippet}")
 
-            # Update memory with the context
+            # Add the retrieved context to the conversation memory so the LLM
+            # can see it when generating a response.
             memory.chat_memory.add_user_message(f"Context:\n{context}")
         else:
             context = ""
             logger.warning("Vector store is empty. No context available.")
 
-        # Add user message to memory
+        # Record the user's latest message in the conversation memory
         memory.chat_memory.add_user_message(user_input)
 
-        # Get response from LangChain's conversation
+        # Ask the language model for a reply given the full conversation state
         response = conversation.predict(input=user_input)
         return response
     except RateLimitError as e:
@@ -360,11 +399,12 @@ def get_gpt_response_stream(user_input):
     """
     try:
         if vector_store is not None:
-            # Retrieve relevant context from vector store with caching
+            # Grab documents related to the query. These will be streamed to the
+            # model as additional context.
             relevant_docs = cached_similarity_search(user_input, k=10)
             context = "\n".join([doc.page_content for doc in relevant_docs])
 
-            # Log the retrieved context
+            # Log snippets from the retrieved documents for debugging
             for idx, doc in enumerate(relevant_docs):
                 snippet = (
                     doc.page_content[:100].replace("\n", " ") + "..."
@@ -373,18 +413,17 @@ def get_gpt_response_stream(user_input):
                 )
                 logger.info(f"Retrieved Doc {idx + 1}: {snippet}")
 
-            # Update memory with the context
+            # Inject the retrieved context into the conversation memory
             memory.chat_memory.add_user_message(f"Context:\n{context}")
         else:
             context = ""
             logger.warning("Vector store is empty. No context available.")
 
-        # Add user message to memory
+        # Record the user's latest message
         memory.chat_memory.add_user_message(user_input)
 
-        # Stream the response using ConversationChain's predict method
-        # Note: LangChain's ConversationChain does not natively support streaming.
-        # Therefore, we'll interact directly with ChatOpenAI for streaming.
+        # ConversationChain does not support streaming directly, so we
+        # iterate over the streaming generator provided by ``ChatOpenAI``.
 
         # Initialize ChatOpenAI with streaming
         # stream_llm = ChatOpenAI(
@@ -393,10 +432,10 @@ def get_gpt_response_stream(user_input):
         #    streaming=True  # Enable streaming
         # )
 
-        # Prepare the conversation messages
+        # Convert the stored conversation into a list of messages
         messages = memory.chat_memory.messages
         ai_response = ""
-        # Start streaming the response
+        # Forward each chunk of text to the client as soon as it's available
         for chunk in llm.stream(messages):
             # Each chunk is an AIMessageChunk object
             content = chunk.content
@@ -419,14 +458,17 @@ def remove_document(document_id):
     """
     Remove a document and its embeddings from the FAISS vector store and document mapping.
     """
+    # Ensure the requested document exists in our mapping before attempting any
+    # deletion operations.
     if document_id not in document_mapping:
         logger.warning(f"Document ID {document_id} not found in mapping.")
         raise ValueError("Document ID not found.")
 
-    # Retrieve the source from the document metadata
+    # Retrieve the "source" identifier from the document metadata. All chunks
+    # that originated from the same source will be removed together.
     source = document_mapping[document_id]["metadata"]["source"]
 
-    # Remove documents from document_mapping.json
+    # Build a list of all documents that share the same source
     to_delete_ids = [
         doc_id
         for doc_id, doc in document_mapping.items()
@@ -438,11 +480,11 @@ def remove_document(document_id):
         f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping."
     )
 
-    # Save the updated document mapping
+    # Persist the updated mapping back to disk
     with open(mapping_path, "w") as f:
         json.dump(document_mapping, f)
 
-    # Rebuild FAISS vector store to reflect deletions
+    # Regenerate the FAISS index so it no longer references the deleted chunks
     logger.info("Rebuilding FAISS vector store to reflect deletions.")
     rebuild_faiss()
 
@@ -454,14 +496,19 @@ def update_all_documents():
     """
     global all_documents
     try:
+        # Pull the latest records from the SQLRecordManager
         records = record_manager.get_all_records()
+
+        # Convert the records into ``Document`` objects compatible with FAISS
         all_documents = [
             Document(page_content=record.page_content, metadata=record.metadata)
             for record in records
         ]
+
         logger.info(f"Updated all_documents list with {len(all_documents)} documents.")
     except Exception as e:
         logger.error(f"Failed to update all_documents: {e}")
+        # On failure, reset to an empty list so downstream functions don't crash
         all_documents = []
 
 
