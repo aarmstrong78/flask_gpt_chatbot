@@ -24,6 +24,12 @@
             <a href="{{ url_for('chat') }}">Chat</a>
             <a href="{{ url_for('upload_page') }}">Upload Documents</a>
             <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
+            {% if current_user.is_authenticated %}
+            <span class="user-info">{{ current_user.name }}</span>
+            <a href="{{ url_for('logout') }}">Logout</a>
+            {% else %}
+            <a href="{{ url_for('login') }}">Login</a>
+            {% endif %}
         </div>
     </div>
     
