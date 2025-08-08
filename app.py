@@ -164,7 +164,7 @@ def extract_text(file_path, filename):
 memory = ConversationBufferMemory()
 llm = ChatOpenAI(
     temperature=0.7,
-    model_name="gpt-4o",
+    model_name="gpt-5",
     # model_name="o1-mini",
     streaming=True,  # Enable streaming so responses can be incrementally sent
     openai_api_key=openai_api_key,
