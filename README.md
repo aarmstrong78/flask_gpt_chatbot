@@ -9,6 +9,7 @@ DocuChat is a Flask web application that provides a simple interface for chattin
 - Manage uploaded documents and delete sources when no longer needed.
 - Basic error handling pages for 404 and 500 errors.
 - Dockerfile for containerized deployment.
+- Google OAuth login keeps conversations and documents separated per user.
 
 ## Requirements
 
@@ -25,6 +26,7 @@ Create a `.env` file or set the following environment variables:
 
 - `OPENAI_API_KEY` – your OpenAI API key
 - `SECRET_KEY` – secret key used by Flask
+- `GOOGLE_CLIENT_ID` and `GOOGLE_CLIENT_SECRET` – OAuth credentials for Google login
 
 ## Running
 

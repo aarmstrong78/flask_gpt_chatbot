@@ -18,7 +18,12 @@ def _patch_external(monkeypatch):
 
 def create_client():
     app.app.config["TESTING"] = False
-    return app.app.test_client()
+    client = app.app.test_client()
+    with client.session_transaction() as sess:
+        user = app.User("test", "Test User", "test@example.com")
+        app.users[user.id] = user
+        sess["_user_id"] = user.id
+    return client
 
 
 def test_upload_page_has_chat_link():
