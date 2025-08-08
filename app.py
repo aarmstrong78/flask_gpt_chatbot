@@ -163,7 +163,7 @@ def extract_text(file_path, filename):
 # awareness of previous exchanges.
 memory = ConversationBufferMemory()
 llm = ChatOpenAI(
-    temperature=0.7,
+    temperature=1, # GPT5 does not support temp<>1
     model_name="gpt-5",
     # model_name="o1-mini",
     streaming=True,  # Enable streaming so responses can be incrementally sent
