@@ -409,7 +409,7 @@ def remove_document(document_id):
 @app.route("/login")
 def login():
     """Initiate Google OAuth login."""
-    redirect_uri = url_for("authorize", _external=True)
+    redirect_uri = url_for("authorize", _external=True, _scheme="https")
     return oauth.google.authorize_redirect(redirect_uri)
 
 
