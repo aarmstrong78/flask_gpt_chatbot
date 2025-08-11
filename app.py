@@ -20,8 +20,18 @@ from flask import (
     flash,
     jsonify,
 )
+from flask_login import (
+    LoginManager,
+    UserMixin,
+    login_user,
+    login_required,
+    logout_user,
+    current_user,
+)
 from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
+
+from authlib.integrations.flask_client import OAuth
 
 from langchain.chains import ConversationChain
 from langchain_core.documents import Document
@@ -38,7 +48,6 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_community.docstore.in_memory import InMemoryDocstore
 
-from langchain.indexes import SQLRecordManager
 import faiss
 
 from cachetools import TTLCache, cached
@@ -79,7 +88,43 @@ load_dotenv()
 # =====================
 
 app = Flask(__name__)
-app.secret_key = os.getenv("SECRET_KEY")
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
+
+# User session management
+login_manager = LoginManager()
+login_manager.login_view = "login"
+login_manager.init_app(app)
+
+oauth = OAuth(app)
+oauth.register(
+    name="google",
+    client_id=os.getenv("GOOGLE_CLIENT_ID"),
+    client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
+    access_token_url="https://oauth2.googleapis.com/token",
+    authorize_url="https://accounts.google.com/o/oauth2/auth",
+    api_base_url="https://www.googleapis.com/oauth2/v1/",
+    client_kwargs={"scope": "openid email profile"},
+)
+
+
+class User(UserMixin):
+    """Simple user model for session handling."""
+
+    def __init__(self, user_id, name, email):
+        self.id = user_id
+        self.name = name
+        self.email = email
+
+
+users = {}
+user_states = {}
+
+
+@login_manager.user_loader
+def load_user(user_id):
+    """Return a user object by ID."""
+    return users.get(user_id)
+
 
 # Configure upload settings
 UPLOAD_FOLDER = "uploads/"
@@ -99,10 +144,6 @@ os.makedirs("data", exist_ok=True)
 # Initialize an in-memory cache for embeddings. This avoids repeatedly
 # generating embeddings for the same text within a short period.
 cache = TTLCache(maxsize=1000, ttl=3600)  # 1-hour TTL
-
-# Separate cache used for similarity search results so we don't hit the FAISS
-# index on every request.
-similarity_cache = TTLCache(maxsize=1000, ttl=600)  # 10-minute TTL
 
 # =====================
 # Helper Functions
@@ -150,62 +191,20 @@ def extract_text(file_path, filename):
 
     # Log the extracted texts
     for idx, text in enumerate(texts):
-        logger.info(
-            f"Text chunk {idx + 1}: {text.page_content[:100]}..."
-        )  # Log first 100 chars
+        logger.info(f"Text chunk {idx + 1}: {text.page_content[:100]}...")  # Log first 100 chars
 
     # Return the list of Document objects generated from the uploaded file
     return texts
 
 
-# Initialize LangChain components globally
-# ``ConversationBufferMemory`` stores a history of the dialog so the LLM has
-# awareness of previous exchanges.
-memory = ConversationBufferMemory()
+# Initialize the language model shared across users
 llm = ChatOpenAI(
-    temperature=1, # GPT5 does not support temp<>1
+    temperature=1,  # GPT5 does not support temp<>1
     model_name="gpt-5",
-    # model_name="o1-mini",
     streaming=True,  # Enable streaming so responses can be incrementally sent
     openai_api_key=openai_api_key,
 )
-
-# ``ConversationChain`` is a simple LangChain wrapper that handles prompt
-# formatting and keeps track of the conversation state.
-conversation = ConversationChain(llm=llm, memory=memory)
 logger.info(f"Using OpenAI model: {llm.model_name}")
-
-
-# Define paths for vector store and document mapping
-vector_store_path = "data/vector_store.faiss"
-mapping_path = "data/document_mapping.json"
-record_manager_path = "data/record_manager_cache.sql"
-
-# Initialize RecordManager
-# ``SQLRecordManager`` keeps a persistent log of indexed documents. The
-# namespace allows multiple applications to share the same underlying database.
-namespace = "faiss/convodocs"  # Define a namespace for your application
-
-
-if os.path.exists(record_manager_path):
-    try:
-        record_manager = SQLRecordManager(
-            namespace, db_url=f"sqlite:///{record_manager_path}"
-        )
-        logger.info("Loaded existing SQLRecordManager.")
-    except Exception as e:
-        logger.error(f"Failed to load SQLRecordManager: {e}")
-        record_manager = SQLRecordManager(
-            namespace, db_url=f"sqlite:///{record_manager_path}"
-        )
-        record_manager.create_schema()
-        logger.info("Initialized new SQLRecordManager with schema.")
-else:
-    record_manager = SQLRecordManager(
-        namespace, db_url=f"sqlite:///{record_manager_path}"
-    )
-    record_manager.create_schema()
-    logger.info("Initialized new SQLRecordManager with schema.")
 
 
 # Initialize embeddings globally
@@ -223,121 +222,85 @@ def get_cached_embedding(text):
     return embeddings.embed_query(text)
 
 
-@cached(similarity_cache)
 def cached_similarity_search(query, k=10):
-    """Return cached similar documents for the query."""
+    """Return cached similar documents for the query for the current user."""
+    state = get_user_state()
+    cache = state["similarity_cache"]
+    if query in cache:
+        return cache[query]
+    if state["vector_store"] is None:
+        results = []
+    else:
+        results = state["vector_store"].similarity_search(query, k=k)
+    cache[query] = results
+    return results
 
-    # If the vector store hasn't been initialized yet we simply return an empty
-    # list. This prevents unnecessary errors early in application startup.
-    if vector_store is None:
-        return []
-    return vector_store.similarity_search(query, k=k)
 
-
-# =====================
-# FAISS Vector Store Initialization
-# =====================
-
-# Initialize FAISS vector store as None; it will be loaded or created as needed
-vector_store = None
+def get_user_state():
+    """Return or create the state object for the authenticated user."""
+    user_id = current_user.get_id()
+    state = user_states.get(user_id)
+    if state is None:
+        memory = ConversationBufferMemory()
+        conversation = ConversationChain(llm=llm, memory=memory)
+        vector_store_path = f"data/vector_store_{user_id}.faiss"
+        mapping_path = f"data/document_mapping_{user_id}.json"
+        if os.path.exists(mapping_path):
+            try:
+                with open(mapping_path, "r") as f:
+                    document_mapping = json.load(f)
+            except json.JSONDecodeError:
+                document_mapping = {}
+        else:
+            document_mapping = {}
+            with open(mapping_path, "w") as f:
+                json.dump(document_mapping, f)
+        vector_store = None
+        if os.path.exists(vector_store_path):
+            try:
+                vector_store = FAISS.load_local(vector_store_path, embeddings, allow_dangerous_deserialization=True)
+            except Exception:
+                vector_store = None
+        state = {
+            "memory": memory,
+            "conversation": conversation,
+            "vector_store": vector_store,
+            "document_mapping": document_mapping,
+            "vector_store_path": vector_store_path,
+            "mapping_path": mapping_path,
+            "similarity_cache": TTLCache(maxsize=1000, ttl=600),
+        }
+        user_states[user_id] = state
+    return state
 
 
 def rebuild_faiss():
-    """Rebuild the FAISS vector store from ``document_mapping.json``."""
-    global vector_store, document_mapping
+    """Rebuild the FAISS vector store for the current user."""
+    state = get_user_state()
     try:
-        # Determine the dimensionality required for the FAISS index by
-        # embedding a dummy string. This avoids hardcoding the dimension.
         sample_embedding = embeddings.embed_query("test")
         embedding_dim = len(sample_embedding)
-        logger.info(f"Embedding dimension determined: {embedding_dim}")
-
-        # Create a brand new FAISS index backed by an in-memory docstore
         faiss_index = faiss.IndexFlatL2(embedding_dim)
-        vector_store = FAISS(
+        state["vector_store"] = FAISS(
             embedding_function=embeddings,
             index=faiss_index,
             docstore=InMemoryDocstore(),
             index_to_docstore_id={},
         )
-
-        # Load all previously stored documents from ``document_mapping.json``
-        with open(mapping_path, "r") as f:
-            document_mapping = json.load(f)
-
         all_documents = [
             Document(page_content=doc["page_content"], metadata=doc["metadata"])
-            for doc in document_mapping.values()
+            for doc in state["document_mapping"].values()
         ]
-
-        # Ingest the documents into the FAISS index so they can be retrieved
         if all_documents:
-            vector_store.add_documents(all_documents)
+            state["vector_store"].add_documents(all_documents)
             logger.info(f"Added {len(all_documents)} documents to FAISS vector store.")
         else:
             logger.info("No documents to add to FAISS vector store.")
-
-        # Persist the rebuilt vector store so it can be reused later
-        vector_store.save_local(vector_store_path)
+        state["vector_store"].save_local(state["vector_store_path"])
         logger.info("FAISS vector store rebuilt and saved to disk.")
     except Exception as e:
         logger.error(f"Failed to rebuild FAISS vector store: {e}")
-        vector_store = None
-
-
-# =====================
-# Document Mapping Initialization
-# =====================
-
-# Load or initialize the document mapping
-if os.path.exists(mapping_path):
-    try:
-        with open(mapping_path, "r") as f:
-            # Check if the file is empty
-            if os.path.getsize(mapping_path) > 0:
-                document_mapping = json.load(f)
-                logger.info("Loaded existing document mapping.")
-            else:
-                # File is empty, initialize empty dict
-                document_mapping = {}
-                with open(mapping_path, "w") as fw:
-                    json.dump(document_mapping, fw)
-                logger.warning(
-                    "document_mapping.json was empty. Initialized as empty dictionary."
-                )
-    except json.JSONDecodeError:
-        # JSON is malformed, initialize empty dict
-        document_mapping = {}
-        with open(mapping_path, "w") as fw:
-            json.dump(document_mapping, fw)
-        logger.error(
-            "document_mapping.json was malformed. Reinitialized as empty dictionary."
-        )
-else:
-    document_mapping = {}
-    with open(mapping_path, "w") as f:
-        json.dump(document_mapping, f)
-    logger.info("Initialized new document mapping.")
-
-# =====================
-# Initialize or Rebuild FAISS Vector Store
-# =====================
-
-if os.path.exists(vector_store_path):
-    try:
-        vector_store = FAISS.load_local(
-            vector_store_path, embeddings, allow_dangerous_deserialization=True
-        )
-        logger.info("Loaded existing FAISS vector store.")
-    except Exception as e:
-        logger.error(f"Failed to load FAISS vector store: {e}")
-        logger.info("Rebuilding FAISS vector store from document mapping.")
-        rebuild_faiss()
-else:
-    logger.info(
-        "No existing FAISS vector store found. Initializing FAISS vector store."
-    )
-    rebuild_faiss()
+        state["vector_store"] = None
 
 
 # =====================
@@ -350,16 +313,10 @@ def get_gpt_response(user_input):
     Generate a response from GPT-4 based on user input and contextual embeddings.
     """
     try:
-        if vector_store is not None:
-            # Retrieve relevant documents from the FAISS index. These documents
-            # provide additional context to the language model.
+        state = get_user_state()
+        if state["vector_store"] is not None:
             relevant_docs = cached_similarity_search(user_input, k=10)
-
-            # Combine the document texts into a single context string
             context = "\n".join([doc.page_content for doc in relevant_docs])
-
-            # Log a small snippet from each retrieved document so we can debug
-            # what context was supplied to the model.
             for idx, doc in enumerate(relevant_docs):
                 snippet = (
                     doc.page_content[:100].replace("\n", " ") + "..."
@@ -367,19 +324,12 @@ def get_gpt_response(user_input):
                     else doc.page_content
                 )
                 logger.info(f"Retrieved Doc {idx + 1}: {snippet}")
-
-            # Add the retrieved context to the conversation memory so the LLM
-            # can see it when generating a response.
-            memory.chat_memory.add_user_message(f"Context:\n{context}")
+            state["memory"].chat_memory.add_user_message(f"Context:\n{context}")
         else:
-            context = ""
             logger.warning("Vector store is empty. No context available.")
 
-        # Record the user's latest message in the conversation memory
-        memory.chat_memory.add_user_message(user_input)
-
-        # Ask the language model for a reply given the full conversation state
-        response = conversation.predict(input=user_input)
+        state["memory"].chat_memory.add_user_message(user_input)
+        response = state["conversation"].predict(input=user_input)
         return response
     except RateLimitError as e:
         # Log the error
@@ -398,13 +348,10 @@ def get_gpt_response_stream(user_input):
     Yields tokens as they are generated.
     """
     try:
-        if vector_store is not None:
-            # Grab documents related to the query. These will be streamed to the
-            # model as additional context.
+        state = get_user_state()
+        if state["vector_store"] is not None:
             relevant_docs = cached_similarity_search(user_input, k=10)
             context = "\n".join([doc.page_content for doc in relevant_docs])
-
-            # Log snippets from the retrieved documents for debugging
             for idx, doc in enumerate(relevant_docs):
                 snippet = (
                     doc.page_content[:100].replace("\n", " ") + "..."
@@ -412,39 +359,21 @@ def get_gpt_response_stream(user_input):
                     else doc.page_content
                 )
                 logger.info(f"Retrieved Doc {idx + 1}: {snippet}")
-
-            # Inject the retrieved context into the conversation memory
-            memory.chat_memory.add_user_message(f"Context:\n{context}")
+            state["memory"].chat_memory.add_user_message(f"Context:\n{context}")
         else:
-            context = ""
             logger.warning("Vector store is empty. No context available.")
 
-        # Record the user's latest message
-        memory.chat_memory.add_user_message(user_input)
+        state["memory"].chat_memory.add_user_message(user_input)
 
-        # ConversationChain does not support streaming directly, so we
-        # iterate over the streaming generator provided by ``ChatOpenAI``.
-
-        # Initialize ChatOpenAI with streaming
-        # stream_llm = ChatOpenAI(
-        #    temperature=0.7,
-        #    model_name="gpt-4o",
-        #    streaming=True  # Enable streaming
-        # )
-
-        # Convert the stored conversation into a list of messages
-        messages = memory.chat_memory.messages
+        messages = state["memory"].chat_memory.messages
         ai_response = ""
-        # Forward each chunk of text to the client as soon as it's available
         for chunk in llm.stream(messages):
-            # Each chunk is an AIMessageChunk object
             content = chunk.content
             if content:
                 ai_response += content
                 yield content
 
-        # After streaming, add AI's response to memory
-        memory.chat_memory.add_ai_message(ai_response)
+        state["memory"].chat_memory.add_ai_message(ai_response)
 
     except RateLimitError as e:
         logger.error(f"Rate limit exceeded: {e}")
@@ -458,95 +387,81 @@ def remove_document(document_id):
     """
     Remove a document and its embeddings from the FAISS vector store and document mapping.
     """
-    # Ensure the requested document exists in our mapping before attempting any
-    # deletion operations.
+    state = get_user_state()
+    document_mapping = state["document_mapping"]
     if document_id not in document_mapping:
         logger.warning(f"Document ID {document_id} not found in mapping.")
         raise ValueError("Document ID not found.")
 
-    # Retrieve the "source" identifier from the document metadata. All chunks
-    # that originated from the same source will be removed together.
     source = document_mapping[document_id]["metadata"]["source"]
-
-    # Build a list of all documents that share the same source
-    to_delete_ids = [
-        doc_id
-        for doc_id, doc in document_mapping.items()
-        if doc["metadata"]["source"] == source
-    ]
+    to_delete_ids = [doc_id for doc_id, doc in document_mapping.items() if doc["metadata"]["source"] == source]
     for doc_id in to_delete_ids:
         del document_mapping[doc_id]
-    logger.info(
-        f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping."
-    )
+    logger.info(f"Removed {len(to_delete_ids)} documents associated with source '{source}' from document mapping.")
 
-    # Persist the updated mapping back to disk
-    with open(mapping_path, "w") as f:
+    with open(state["mapping_path"], "w") as f:
         json.dump(document_mapping, f)
 
-    # Regenerate the FAISS index so it no longer references the deleted chunks
     logger.info("Rebuilding FAISS vector store to reflect deletions.")
     rebuild_faiss()
 
 
-# After indexing or deletion, update all_documents
-def update_all_documents():
-    """
-    Fetch all current documents from the record manager.
-    """
-    global all_documents
-    try:
-        # Pull the latest records from the SQLRecordManager
-        records = record_manager.get_all_records()
+@app.route("/login")
+def login():
+    """Initiate Google OAuth login."""
+    redirect_uri = url_for("authorize", _external=True, _scheme="https")
+    return oauth.google.authorize_redirect(redirect_uri)
 
-        # Convert the records into ``Document`` objects compatible with FAISS
-        all_documents = [
-            Document(page_content=record.page_content, metadata=record.metadata)
-            for record in records
-        ]
 
-        logger.info(f"Updated all_documents list with {len(all_documents)} documents.")
-    except Exception as e:
-        logger.error(f"Failed to update all_documents: {e}")
-        # On failure, reset to an empty list so downstream functions don't crash
-        all_documents = []
+@app.route("/authorize")
+def authorize():
+    """Handle the OAuth callback from Google."""
+    token = oauth.google.authorize_access_token()
+    user_info = oauth.google.parse_id_token(token)
+    user = User(user_info["sub"], user_info.get("name", ""), user_info.get("email", ""))
+    users[user.id] = user
+    login_user(user)
+    get_user_state()
+    return redirect(url_for("chat"))
+
+
+@app.route("/logout")
+@login_required
+def logout():
+    """Log out the current user."""
+    logout_user()
+    return redirect(url_for("login"))
 
 
 @app.route("/")
 def home():
-    """
-    Redirect the root URL to the chat page.
-    """
-    return redirect(url_for("chat"))
+    """Redirect to chat if authenticated, otherwise to login."""
+    if current_user.is_authenticated:
+        return redirect(url_for("chat"))
+    return redirect(url_for("login"))
 
 
 @app.route("/upload_page", methods=["GET"])
+@login_required
 def upload_page():
-    """
-    Render the upload page via a GET request.
-    """
-    # Get unique sources
-    unique_sources = list(
-        set([doc["metadata"]["source"] for doc in document_mapping.values()])
-    )
+    """Render the upload page via a GET request."""
+    state = get_user_state()
+    unique_sources = list({doc["metadata"]["source"] for doc in state["document_mapping"].values()})
     return render_template("upload.html", sources=unique_sources)
 
 
 @app.route("/upload", methods=["POST"])
+@login_required
 def upload_file():
-    """
-    Handle file uploads, extract text, generate embeddings, and update the vector store.
-    """
+    """Handle file uploads and update the user's vector store."""
+    state = get_user_state()
 
-    # Check if the post request has the file part
     if "file" not in request.files:
         flash("No file part")
         logger.warning("No file part in the request.")
         return redirect(url_for("upload_page"))
 
     file = request.files["file"]
-
-    # If user does not select file, browser may submit an empty part
     if file.filename == "":
         flash("No selected file")
         logger.warning("No file selected for upload.")
@@ -554,12 +469,13 @@ def upload_file():
 
     if file and allowed_file(file.filename):
         filename = secure_filename(file.filename)
-        file_path = os.path.join(app.config["UPLOAD_FOLDER"], filename)
+        user_folder = os.path.join(app.config["UPLOAD_FOLDER"], current_user.get_id())
+        os.makedirs(user_folder, exist_ok=True)
+        file_path = os.path.join(user_folder, filename)
         file.save(file_path)
         flash("File successfully uploaded")
         logger.info(f"File uploaded: {filename}")
 
-        # Extract text from the uploaded file
         try:
             texts = extract_text(file_path, filename)
             logger.info(f"Extracted {len(texts)} text chunks from {filename}.")
@@ -570,60 +486,39 @@ def upload_file():
 
         if texts:
             try:
-                # Initialize FAISS vector store if it's None
-                if vector_store is None:
-                    logger.info(
-                        "FAISS vector store is not initialized. Rebuilding FAISS vector store."
-                    )
+                if state["vector_store"] is None:
                     rebuild_faiss()
-                    if vector_store is None:
-                        flash(
-                            "Failed to initialize the vector store. Please check the logs."
-                        )
+                    if state["vector_store"] is None:
+                        flash("Failed to initialize the vector store. Please check the logs.")
                         return redirect(url_for("upload_page"))
 
-                # Create Document objects with 'source' metadata
-                source_id = filename  # Using filename as the source identifier
+                source_id = filename
                 new_documents = [
-                    Document(
-                        page_content=text.page_content, metadata={"source": source_id}
-                    )
-                    for text in texts
+                    Document(page_content=text.page_content, metadata={"source": source_id}) for text in texts
                 ]
 
-                # Add new documents to FAISS vector store
-                if vector_store is not None:
-                    vector_store.add_documents(new_documents)
-                    logger.info(
-                        f"Added {len(new_documents)} new documents to FAISS vector store."
-                    )
+                if state["vector_store"] is not None:
+                    state["vector_store"].add_documents(new_documents)
+                    logger.info(f"Added {len(new_documents)} new documents to FAISS vector store.")
 
-                # Update the local document mapping
                 for doc in new_documents:
                     document_id = str(uuid.uuid4())
-                    document_mapping[document_id] = {
+                    state["document_mapping"][document_id] = {
                         "page_content": doc.page_content,
                         "metadata": doc.metadata,
                         "file_path": file_path,
                     }
 
-                # Save the updated document mapping
-                with open(mapping_path, "w") as f:
-                    json.dump(document_mapping, f)
+                with open(state["mapping_path"], "w") as f:
+                    json.dump(state["document_mapping"], f)
 
-                # Save the FAISS vector store to disk
-                if vector_store is not None:
-                    vector_store.save_local(vector_store_path)
+                if state["vector_store"] is not None:
+                    state["vector_store"].save_local(state["vector_store_path"])
                     logger.info("FAISS vector store saved to disk after upload.")
-
-                # Update all_documents list if needed (Not used anymore)
-                # update_all_documents()  # Removed as we rely on document_mapping.json
 
                 flash("File content integrated into context")
             except RateLimitError as e:
-                flash(
-                    "Rate limit exceeded while processing your file. Please try again later."
-                )
+                flash("Rate limit exceeded while processing your file. Please try again later.")
                 logger.error(f"Rate limit exceeded during embedding: {e}")
             except Exception as e:
                 flash("An error occurred while processing your file. Please try again.")
@@ -633,21 +528,21 @@ def upload_file():
             logger.warning("No text extracted from the uploaded file.")
 
         return redirect(url_for("chat"))
-    else:
-        flash("Allowed file types are pdf, docx, txt")
-        logger.warning(f"Attempted to upload unsupported file type: {file.filename}")
-        return redirect(url_for("upload_page"))
+    flash("Allowed file types are pdf, docx, txt")
+    logger.warning(f"Attempted to upload unsupported file type: {file.filename}")
+    return redirect(url_for("upload_page"))
 
 
 @app.route("/chat", methods=["GET"])
+@login_required
 def chat():
-    """
-    Render the chat interface.
-    """
-    return render_template("chat.html", document_mapping=document_mapping)
+    """Render the chat interface."""
+    state = get_user_state()
+    return render_template("chat.html", document_mapping=state["document_mapping"])
 
 
 @app.route("/get_response", methods=["POST"])
+@login_required
 def get_response():
     user_input = request.json.get("message")
     if not user_input:
@@ -660,6 +555,7 @@ def get_response():
 
 
 @app.route("/stream_response", methods=["POST"])
+@login_required
 def stream_response():
     """
     Handle chat messages and stream responses from GPT-4o.
@@ -677,6 +573,7 @@ def stream_response():
 
 
 @app.route("/remove_document", methods=["POST"])
+@login_required
 def remove_document_route():
     """
     Endpoint to remove a document and its embeddings from the context.
@@ -703,12 +600,10 @@ def remove_document_route():
 
 
 @app.route("/delete_sources", methods=["POST"])
+@login_required
 def delete_sources():
-    """
-    Handle deletion of selected sources.
-    Expects form data with 'sources' as a list of source names.
-    """
-    global vector_store
+    """Handle deletion of selected sources for the current user."""
+    state = get_user_state()
     selected_sources = request.form.getlist("sources")
 
     if not selected_sources:
@@ -717,28 +612,17 @@ def delete_sources():
         return redirect(url_for("upload_page"))
 
     try:
-        # Fetch all current documents
-        all_current_docs = [
-            Document(page_content=doc["page_content"], metadata=doc["metadata"])
-            for doc in document_mapping.values()
-        ]
-
-        # Rebuild FAISS vector store after removing selected sources
-        logger.info("Rebuilding FAISS vector store after source deletions.")
-        vector_store = None  # Reset FAISS vector store
-        with open(mapping_path, "w") as f:
-            # Remove documents associated with selected sources
+        with open(state["mapping_path"], "w") as f:
             to_delete_ids = [
                 doc_id
-                for doc_id, doc in document_mapping.items()
+                for doc_id, doc in state["document_mapping"].items()
                 if doc["metadata"]["source"] in selected_sources
             ]
             for doc_id in to_delete_ids:
-                del document_mapping[doc_id]
-            # Save the updated document mapping
-            json.dump(document_mapping, f)
+                del state["document_mapping"][doc_id]
+            json.dump(state["document_mapping"], f)
 
-        # Rebuild FAISS vector store
+        state["vector_store"] = None
         rebuild_faiss()
 
         flash("Selected sources have been successfully deleted.")
