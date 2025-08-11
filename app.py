@@ -32,6 +32,7 @@ from werkzeug.utils import secure_filename
 from dotenv import load_dotenv
 
 from authlib.integrations.flask_client import OAuth
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from langchain.chains import ConversationChain
 from langchain_core.documents import Document
@@ -90,6 +91,11 @@ load_dotenv()
 app = Flask(__name__)
 app.secret_key = os.getenv("SECRET_KEY", "dev-secret")
 
+# Respect reverse proxy headers for correct scheme/host in URL building
+# This helps ensure OAuth redirect URIs match when behind a proxy (e.g., on PaaS)
+if os.getenv("USE_PROXY_FIX", "1") == "1":
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_port=1, x_prefix=1)
+
 # User session management
 login_manager = LoginManager()
 login_manager.login_view = "login"
@@ -100,9 +106,8 @@ oauth.register(
     name="google",
     client_id=os.getenv("GOOGLE_CLIENT_ID"),
     client_secret=os.getenv("GOOGLE_CLIENT_SECRET"),
-    access_token_url="https://oauth2.googleapis.com/token",
-    authorize_url="https://accounts.google.com/o/oauth2/auth",
-    api_base_url="https://www.googleapis.com/oauth2/v1/",
+    # Use OIDC discovery to obtain endpoints and JWKs
+    server_metadata_url="https://accounts.google.com/.well-known/openid-configuration",
     client_kwargs={"scope": "openid email profile"},
 )
 
@@ -409,18 +414,47 @@ def remove_document(document_id):
 @app.route("/login")
 def login():
     """Initiate Google OAuth login."""
-    redirect_uri = url_for("authorize", _external=True, _scheme="https")
+    # Build external URL; let ProxyFix adjust scheme behind proxies.
+    redirect_uri = url_for("authorize", _external=True)
     return oauth.google.authorize_redirect(redirect_uri)
 
 
 @app.route("/authorize")
 def authorize():
     """Handle the OAuth callback from Google."""
-    token = oauth.google.authorize_access_token()
-    user_info = oauth.google.parse_id_token(token)
-    user = User(user_info["sub"], user_info.get("name", ""), user_info.get("email", ""))
+    try:
+        token = oauth.google.authorize_access_token()
+    except Exception as e:
+        logger.error(f"OAuth authorization failed: {e}")
+        flash("OAuth authorization failed. Please try again.")
+        return redirect(url_for("login"))
+
+    user_info = None
+    # Prefer ID Token parsing; fall back to UserInfo endpoint if needed
+    try:
+        user_info = oauth.google.parse_id_token(token)
+    except Exception as e:
+        logger.warning(f"parse_id_token failed; falling back to userinfo: {e}")
+        try:
+            resp = oauth.google.get("userinfo")
+            user_info = resp.json()
+        except Exception as ee:
+            logger.error(f"Failed to fetch userinfo: {ee}")
+
+    if not user_info:
+        flash("Failed to retrieve user profile from Google.")
+        return redirect(url_for("login"))
+
+    user_id = user_info.get("sub") or user_info.get("id")
+    if not user_id:
+        logger.error(f"User info missing identifier: {user_info}")
+        flash("Invalid user profile received from Google.")
+        return redirect(url_for("login"))
+
+    user = User(user_id, user_info.get("name", ""), user_info.get("email", ""))
     users[user.id] = user
     login_user(user)
+    # Initialize per-user state eagerly to avoid first-visit race conditions
     get_user_state()
     return redirect(url_for("chat"))
 
