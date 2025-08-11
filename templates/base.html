@@ -19,20 +19,34 @@
 <body>
     <!-- Header Section -->
     <div class="header">
-        <h1>DocuChat</h1>
-        <div class="header-buttons">
-            <a href="{{ url_for('chat') }}">Chat</a>
-            <a href="{{ url_for('upload_page') }}">Upload Documents</a>
+        <div class="brand">
+            <div class="logo"></div>
+            <div>DocuChat</div>
+        </div>
+        <nav class="nav">
+            <a href="{{ url_for('chat') }}" class="{% if request.endpoint=='chat' %}active{% endif %}">Chat</a>
+            <a href="{{ url_for('upload_page') }}" class="{% if request.endpoint=='upload_page' %}active{% endif %}">Upload</a>
             <button id="theme-toggle" aria-label="Toggle theme">🌙</button>
             {% if current_user.is_authenticated %}
-            <span class="user-info">{{ current_user.name }}</span>
-            <a href="{{ url_for('logout') }}">Logout</a>
+              <span class="user-info">{{ current_user.name }}</span>
+              <a class="btn btn-secondary" href="{{ url_for('logout') }}">Logout</a>
             {% else %}
-            <a href="{{ url_for('login') }}">Login</a>
+              <a class="btn btn-primary" href="{{ url_for('login') }}">Login</a>
             {% endif %}
-        </div>
+        </nav>
     </div>
     
+    <!-- Toasts -->
+    <div class="toasts" id="toasts">
+        {% with messages = get_flashed_messages() %}
+            {% if messages %}
+                {% for message in messages %}
+                    <div class="toast">{{ message }}</div>
+                {% endfor %}
+            {% endif %}
+        {% endwith %}
+    </div>
+
     <!-- Main Content -->
     {% block content %}{% endblock %}
     
@@ -68,6 +82,11 @@
             if (stored) {
                 applyTheme(stored);
             }
+            // Auto-hide toasts after a delay
+            const toasts = document.querySelectorAll('.toast');
+            toasts.forEach((t) => {
+              setTimeout(() => { t.style.display = 'none'; }, 3500);
+            });
         </script>
     {% endblock %}
 </body>
