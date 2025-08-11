@@ -12,7 +12,9 @@ import app
 @pytest.fixture(autouse=True)
 def _patch_external(monkeypatch):
     monkeypatch.setattr(app, "get_gpt_response", lambda *args, **kwargs: "mocked")
-    monkeypatch.setattr(app, "get_gpt_response_stream", lambda *args, **kwargs: iter(["mocked"]))
+    monkeypatch.setattr(
+        app, "get_gpt_response_stream", lambda *args, **kwargs: iter(["mocked"])
+    )
     monkeypatch.setattr(app, "rebuild_faiss", lambda *args, **kwargs: None)
 
 
